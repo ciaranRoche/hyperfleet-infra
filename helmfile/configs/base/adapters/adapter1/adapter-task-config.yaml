@@ -1,6 +1,6 @@
-# Example HyperFleet Adapter task configuration
+# HyperFleet Adapter task configuration — desire-based delivery (POC)
+# Adapter1: Creates a ConfigMap per cluster via desire transport
 params:
-
   - name: "clusterId"
     source: "event.id"
     type: "string"
@@ -15,7 +15,6 @@ params:
     source: "env.NAMESPACE"
     type: "string"
 
-# Preconditions with valid operators and CEL expressions
 preconditions:
   - name: "clusterStatus"
     api_call:
@@ -31,6 +30,8 @@ preconditions:
         field: "generation"
       - name: "is_deleting"
         expression: "clusterStatus.?deleted_time.hasValue()"
+      - name: "placementClusterName"
+        expression: "\"cluster1\""
       - name: "clusterNotReconciled"
         expression: |
           status.conditions.filter(c, c.type == "Reconciled").size() > 0
@@ -45,135 +46,121 @@ preconditions:
           )).getSeconds() > 300
 
   - name: "validationCheck"
-    # Precondition passes if cluster is NOT Reconciled OR if cluster is Reconciled and stable for >300 seconds since last transition (enables self-healing) OR if cluster is being deleted
     expression: |
       clusterNotReconciled || clusterReconciledTTL || is_deleting
 
-# Resources with valid K8s manifests
 resources:
-  - name: "resource0"
+  - name: "clusterConfigMap"
     transport:
-      client: "kubernetes"
+      client: "desire"
+      desire:
+        target_cluster: "{{ .placementClusterName }}"
     manifest:
       apiVersion: v1
       kind: ConfigMap
-      data:
-        cluster_id: "{{ .clusterId }}"
-        cluster_name: "{{ .clusterName }}"
       metadata:
         name: "{{ .clusterId | lower }}-adapter1-configmap"
         namespace: "{{ .namespace }}"
         labels:
-          app.kubernetes.io/component: adapter
-          app.kubernetes.io/instance: adapter1
-          app.kubernetes.io/name: hyperfleet-adapter
-          app.kubernetes.io/version: 1.0.0
-          app.kubernetes.io/transport: kubernetes
           hyperfleet.io/cluster-id: "{{ .clusterId }}"
           hyperfleet.io/cluster-name: "{{ .clusterName }}"
+          hyperfleet.io/adapter: "{{ .adapter.name }}"
         annotations:
           hyperfleet.io/generation: "{{ .generation }}"
+      data:
+        cluster_id: "{{ .clusterId }}"
+        cluster_name: "{{ .clusterName }}"
     discovery:
       namespace: "{{ .namespace }}"
-      by_selectors:
-        label_selector:
-          hyperfleet.io/cluster-id: "{{ .clusterId }}"
-          hyperfleet.io/cluster-name: "{{ .clusterName }}"
+      by_name: "{{ .clusterId | lower }}-adapter1-configmap"
     lifecycle:
       delete:
-        # Background propagation is appropriate for simple ConfigMap resources
-        # without nested dependencies - allows faster deletion without waiting
         propagationPolicy: "Background"
         when:
           expression: "is_deleting"
 
-# Post-processing with valid CEL expressions
-# This example contains a ConfigMap resource - we check ConfigMap creation and data availability
 post:
   payloads:
     - name: "statusPayload"
       build:
         adapter: "{{ .adapter.name }}"
         conditions:
-          # Applied: ConfigMap successfully created in the target namespace
           - type: "Applied"
             status:
               expression: |
-                resources.?resource0.?metadata.?creationTimestamp.hasValue() ? "True" : "False"
+                resources.?clusterConfigMap.?metadata.?creationTimestamp.hasValue() ? "True" : "False"
             reason:
               expression: |
-                resources.?resource0.?metadata.?creationTimestamp.hasValue() ? "ConfigMapCreated" : "ConfigMapNotCreated"
+                resources.?clusterConfigMap.?metadata.?creationTimestamp.hasValue() ? "ConfigMapCreated" : "ConfigMapNotCreated"
             message:
               expression: |
-                resources.?resource0.?metadata.?creationTimestamp.hasValue()
-                  ? "ConfigMap created in namespace " + resources.resource0.metadata.namespace
+                resources.?clusterConfigMap.?metadata.?creationTimestamp.hasValue()
+                  ? "ConfigMap created successfully"
                   : "ConfigMap has not been created yet"
-          # Available: ConfigMap data keys are populated and accessible
           - type: "Available"
             status:
               expression: |
-                resources.?resource0.?data.?cluster_id.hasValue() ? "True" : "False"
+                resources.?clusterConfigMap.?data.?cluster_id.hasValue() ? "True" : "False"
             reason:
               expression: |
-                resources.?resource0.?data.?cluster_id.hasValue()
+                resources.?clusterConfigMap.?data.?cluster_id.hasValue()
                   ? "ConfigMapDataPopulated"
                   : "ConfigMapDataMissing"
             message:
               expression: |
-                resources.?resource0.?data.?cluster_id.hasValue()
-                  ? "ConfigMap data keys are populated and accessible"
+                resources.?clusterConfigMap.?data.?cluster_id.hasValue()
+                  ? "ConfigMap data keys are populated"
                   : "ConfigMap data keys are not yet populated"
-          # Health: Adapter execution status (runtime)
           - type: "Health"
             status:
               expression: |
-                adapter.?executionStatus.orValue("") == "success" ? "True" : (adapter.?executionStatus.orValue("") == "failed" ? "False" : "Unknown")
+                adapter.?executionStatus.orValue("") == "success"
+                  && !adapter.?resourcesSkipped.orValue(false)
+                ? "True"
+                : "False"
             reason:
               expression: |
-                adapter.?errorReason.orValue("") != "" ? adapter.?errorReason.orValue("") : "Healthy"
+                adapter.?executionStatus.orValue("") != "success"
+                ? "ExecutionFailed:" + adapter.?executionError.?phase.orValue("unknown")
+                : adapter.?resourcesSkipped.orValue(false)
+                  ? "ResourcesSkipped"
+                  : "Healthy"
             message:
               expression: |
-                adapter.?errorMessage.orValue("") != "" ? adapter.?errorMessage.orValue("") : "All adapter operations completed successfully"
-          # Finalized: Deletion lifecycle completion
+                adapter.?executionStatus.orValue("") != "success"
+                ? "Adapter failed: " + adapter.?executionError.?message.orValue("no details")
+                : adapter.?resourcesSkipped.orValue(false)
+                  ? "Resources skipped: " + adapter.?skipReason.orValue("unknown reason")
+                  : "Adapter execution completed successfully"
           - type: "Finalized"
             status:
               expression: |
                 !is_deleting
                   ? "False"
-                  : (!resources.?resource0.hasValue()
-                      ? "True"
-                      : "False")
+                  : (!resources.?clusterConfigMap.hasValue() ? "True" : "False")
             reason:
               expression: |
                 !is_deleting
                   ? "ResourceActive"
-                  : (!resources.?resource0.hasValue()
-                      ? "CleanupConfirmed"
-                      : (adapter.?executionStatus.orValue("") == "failed"
-                          ? "CleanupFailed"
-                          : "CleanupInProgress"))
+                  : (!resources.?clusterConfigMap.hasValue() ? "CleanupConfirmed" : "CleanupInProgress")
             message:
               expression: |
                 !is_deleting
-                  ? "Resource is active, not scheduled for deletion"
-                  : (!resources.?resource0.hasValue()
+                  ? "Resource is active"
+                  : (!resources.?clusterConfigMap.hasValue()
                       ? "All resources deleted successfully"
-                      : (adapter.?executionStatus.orValue("") == "failed"
-                          ? "Deletion failed during adapter execution"
-                          : "Deletion in progress"))
-        # Event generation ID metadata field needs to use expression to avoid interpolation issues
+                      : "Deletion in progress")
         observed_generation:
           expression: "generation"
         observed_time: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
-        # Optional data field for adapter-specific metrics extracted from resources
         data:
-          namespace:
+          configmap:
             name:
               expression: |
-                resources.?resource0.?metadata.?name.orValue("")
-            creationTimestamp:
+                resources.?clusterConfigMap.?metadata.?name.orValue("")
+            clusterId:
               expression: |
-                resources.?resource0.?metadata.?creationTimestamp.orValue("")
+                resources.?clusterConfigMap.?data.?cluster_id.orValue("")
 
   post_actions:
     - name: "reportClusterStatus"

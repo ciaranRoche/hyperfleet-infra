@@ -1,11 +1,10 @@
-# HyperFleet Adapter deployment configuration for adapter3
+# HyperFleet Adapter deployment configuration — desire-based delivery (POC)
 adapter:
   name: adapter3
 
-# Log the full merged configuration after load (default: false)
-debug_config: false
+debug_config: true
 log:
-  level: info
+  level: debug
 
 clients:
   hyperfleet_api:
@@ -16,10 +15,22 @@ clients:
     retry_backoff: exponential
 
   broker:
-    # These values are overridden at deploy time via env vars from Helm values
     subscription_id: "placeholder"
     topic: "placeholder"
 
-  kubernetes:
-    api_version: "v1"
-    #kube_config_path: PATH_TO_KUBECONFIG  # for local development
+stores:
+  redis-local:
+    type: redis
+    redis:
+      address: "redis.hyperfleet.svc.cluster.local:6379"
+      db: 0
+
+transports:
+  local:
+    type: kubernetes
+  remote:
+    type: desire
+    desire:
+      target_cluster: "{{ .placementClusterName }}"
+      spec_store: redis-local
+      status_store: redis-local

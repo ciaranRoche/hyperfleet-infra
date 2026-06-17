@@ -1,0 +1,6 @@
+apiVersion: v2
+name: redis
+description: Simple single-replica Redis for desire store POC
+type: application
+version: 0.1.0
+appVersion: "7"
