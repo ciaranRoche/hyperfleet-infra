@@ -1,0 +1,34 @@
+apiVersion: authorino.kuadrant.io/v1beta3
+kind: AuthConfig
+metadata:
+  name: hyperfleet-tenant-policy
+  namespace: hyperfleet-local
+spec:
+  hosts:
+    - envoy.hyperfleet-local.svc.cluster.local
+    - localhost
+  authentication:
+    "jwt":
+      jwt:
+        issuerUrl: http://mock-jwt-server.hyperfleet-local.svc:8080
+      credentials:
+        authorizationHeader: {}
+  authorization:
+    "require-org":
+      patternMatching:
+        patterns:
+          - selector: auth.identity.org_id
+            operator: neq
+            value: ""
+  response:
+    success:
+      headers:
+        x-hyperfleet-identity:
+          plain:
+            selector: auth.identity.email
+        x-tenant-org:
+          plain:
+            selector: auth.identity.org_id
+        x-tenant-project:
+          plain:
+            selector: auth.identity.project_id
