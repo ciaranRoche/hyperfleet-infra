@@ -16,8 +16,8 @@ spec:
     spec:
       containers:
         - name: mock-jwt-server
-          image: mock-jwt-server:local
-          imagePullPolicy: IfNotPresent
+          image: localhost/mock-jwt-server:local
+          imagePullPolicy: Never
           ports:
             - containerPort: 8080
           env:

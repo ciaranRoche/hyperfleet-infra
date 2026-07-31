@@ -125,7 +125,7 @@ fi
 # --------------------------------------------------------
 log_test "Tenant acme (proj-1) creates a cluster"
 token_acme=$(get_token "sub=user1&email=user1@acme.com&org_id=acme&project_id=proj-1")
-create_body="{\"name\":\"${ACME_CLUSTER}\",\"spec\":{\"region\":\"us-east-1\"}}"
+create_body="{\"kind\":\"Cluster\",\"name\":\"${ACME_CLUSTER}\",\"spec\":{\"region\":\"us-east-1\"}}"
 result=$(envoy_request POST "/clusters" "$token_acme" "$create_body")
 status=$(echo "$result" | cut -d'|' -f1)
 body=$(echo "$result" | cut -d'|' -f2-)
@@ -146,7 +146,7 @@ fi
 # --------------------------------------------------------
 log_test "Tenant globex creates a cluster"
 token_globex=$(get_token "sub=user2&email=user2@globex.com&org_id=globex&project_id=proj-2")
-create_body="{\"name\":\"${GLOBEX_CLUSTER}\",\"spec\":{\"region\":\"eu-west-1\"}}"
+create_body="{\"kind\":\"Cluster\",\"name\":\"${GLOBEX_CLUSTER}\",\"spec\":{\"region\":\"eu-west-1\"}}"
 result=$(envoy_request POST "/clusters" "$token_globex" "$create_body")
 status=$(echo "$result" | cut -d'|' -f1)
 body=$(echo "$result" | cut -d'|' -f2-)
@@ -270,7 +270,7 @@ if [ -n "$acme_cluster_id" ]; then
     fi
 
     # Body-supplied tenancy must never override the gateway identity.
-    evil_body="{\"name\":\"evil-${RUN_SUFFIX}\",\"spec\":{\"region\":\"us-east-1\"},\"tenancy\":{\"org\":\"globex\"}}"
+    evil_body="{\"kind\":\"Cluster\",\"name\":\"evil-${RUN_SUFFIX}\",\"spec\":{\"region\":\"us-east-1\"},\"tenancy\":{\"org\":\"globex\"}}"
     result=$(envoy_request POST "/clusters" "$token_acme" "$evil_body")
     status=$(echo "$result" | cut -d'|' -f1)
     body=$(echo "$result" | cut -d'|' -f2-)
@@ -408,7 +408,7 @@ fi
 # Test 16: Containment hierarchy, org-scoped token sees all projects
 # --------------------------------------------------------
 log_test "Org-scoped token (no project) sees clusters from all its projects"
-create_body="{\"name\":\"${ACME_P2_CLUSTER}\",\"spec\":{\"region\":\"us-west-2\"}}"
+create_body="{\"kind\":\"Cluster\",\"name\":\"${ACME_P2_CLUSTER}\",\"spec\":{\"region\":\"us-west-2\"}}"
 token_acme_p2=$(get_token "sub=user3&email=user3@acme.com&org_id=acme&project_id=proj-2")
 result=$(envoy_request POST "/clusters" "$token_acme_p2" "$create_body")
 status=$(echo "$result" | cut -d'|' -f1)

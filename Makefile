@@ -555,6 +555,7 @@ ci-cleanup: uninstall-maestro destroy-terraform ## Ci cleanup: uninstall maestro
 # ==== POC Multi-Tenancy Targets ====
 POC_MANIFESTS_DIR ?= manifests/poc-multitenancy
 MOCK_JWT_SERVER_DIR ?= mock-jwt-server
+CONTAINER_TOOL ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null)
 
 .PHONY: install-authorino-operator
 install-authorino-operator: check-kubectl ## Install Authorino Operator (CRDs + cert-manager)
@@ -566,8 +567,12 @@ install-authorino-operator: check-kubectl ## Install Authorino Operator (CRDs + 
 install-authorino: check-kubectl check-hyperfleet-namespace ## Deploy Authorino instance in hyperfleet namespace
 	@echo "Deploying Authorino instance..."
 	@kubectl -n $(NAMESPACE) apply -f $(POC_MANIFESTS_DIR)/authorino.yaml
-	@echo "Waiting for Authorino deployment..."
-	@kubectl -n $(NAMESPACE) wait --for=condition=Available deployment/authorino --timeout=120s || true
+	@echo "Waiting for the operator to create the Authorino deployment..."
+	@for i in $$(seq 1 30); do \
+		kubectl -n $(NAMESPACE) get deployment/authorino >/dev/null 2>&1 && break; \
+		sleep 2; \
+	done
+	@kubectl -n $(NAMESPACE) wait --for=condition=Available deployment/authorino --timeout=120s
 	@echo "Granting TokenReview access to the Authorino service account..."
 	@AUTHORINO_SA=$$(kubectl -n $(NAMESPACE) get deployment/authorino -o jsonpath='{.spec.template.spec.serviceAccountName}'); \
 	kubectl create clusterrolebinding authorino-tokenreview \
@@ -579,8 +584,8 @@ install-authorino: check-kubectl check-hyperfleet-namespace ## Deploy Authorino 
 .PHONY: build-mock-jwt-server
 build-mock-jwt-server: check-kind ## Build mock JWT server image and load into kind
 	@echo "Building mock-jwt-server image..."
-	@$(CONTAINER_TOOL) build -t mock-jwt-server:local $(MOCK_JWT_SERVER_DIR)
-	@$(CONTAINER_TOOL) save mock-jwt-server:local | kind load image-archive /dev/stdin --name $(KIND_CLUSTER_NAME)
+	@$(CONTAINER_TOOL) build -t localhost/mock-jwt-server:local $(MOCK_JWT_SERVER_DIR)
+	@$(CONTAINER_TOOL) save localhost/mock-jwt-server:local | kind load image-archive /dev/stdin --name $(KIND_CLUSTER_NAME)
 	@echo "OK: mock-jwt-server image built and loaded"
 
 .PHONY: install-mock-jwt-server

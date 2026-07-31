@@ -62,5 +62,12 @@ spec:
           plain:
             selector: auth.identity.tenancy_ocid
         x-tenant-compartment:
+          # Emit only when the claim exists: a missing claim otherwise
+          # renders as the literal string "<nil>", which would poison the
+          # API's containment filter for tenancy-scoped callers.
+          when:
+            - selector: auth.identity.compartment_id
+              operator: neq
+              value: ""
           plain:
             selector: auth.identity.compartment_id

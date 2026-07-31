@@ -97,10 +97,10 @@ log_test "Two tenancy OCIDs create clusters and are isolated"
 token_a=$(get_token "sub=usera&email=a@oracle.test&tenancy_ocid=${OCID_A}&compartment_id=dev")
 token_b=$(get_token "sub=userb&email=b@oracle.test&tenancy_ocid=${OCID_B}&compartment_id=dev")
 
-result=$(envoy_request POST "/clusters" "$token_a" "{\"name\":\"${CLUSTER_A}\",\"spec\":{\"region\":\"us-ashburn-1\"}}")
+result=$(envoy_request POST "/clusters" "$token_a" "{\"kind\":\"Cluster\",\"name\":\"${CLUSTER_A}\",\"spec\":{\"region\":\"us-ashburn-1\"}}")
 status_a=$(echo "$result" | cut -d'|' -f1)
 id_a=$(echo "$result" | cut -d'|' -f2- | jq -r '.id // empty')
-result=$(envoy_request POST "/clusters" "$token_b" "{\"name\":\"${CLUSTER_B}\",\"spec\":{\"region\":\"eu-frankfurt-1\"}}")
+result=$(envoy_request POST "/clusters" "$token_b" "{\"kind\":\"Cluster\",\"name\":\"${CLUSTER_B}\",\"spec\":{\"region\":\"eu-frankfurt-1\"}}")
 status_b=$(echo "$result" | cut -d'|' -f1)
 id_b=$(echo "$result" | cut -d'|' -f2- | jq -r '.id // empty')
 
