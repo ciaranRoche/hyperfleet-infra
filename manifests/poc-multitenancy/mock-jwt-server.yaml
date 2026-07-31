@@ -1,0 +1,39 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-jwt-server
+  namespace: hyperfleet-local
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-jwt-server
+  template:
+    metadata:
+      labels:
+        app: mock-jwt-server
+    spec:
+      containers:
+        - name: mock-jwt-server
+          image: mock-jwt-server:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ISSUER_URL
+              value: http://mock-jwt-server.hyperfleet-local.svc:8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-jwt-server
+  namespace: hyperfleet-local
+spec:
+  type: ClusterIP
+  selector:
+    app: mock-jwt-server
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP

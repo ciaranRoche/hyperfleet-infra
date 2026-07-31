@@ -77,6 +77,9 @@ get-credentials: check-terraform ## Configure kubectl credentials from Terraform
 create-kind-cluster: check-kind ## Create a new kind cluster or export kubeconfig if exists
 	@if kind get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
 		echo "kind cluster '$(KIND_CLUSTER_NAME)' already exists ..."; \
+	elif [ -f kind-config.yaml ]; then \
+		echo "Creating new kind cluster '$(KIND_CLUSTER_NAME)' with kind-config.yaml..."; \
+		kind create cluster --name $(KIND_CLUSTER_NAME) --config kind-config.yaml; \
 	else \
 		echo "Creating new kind cluster '$(KIND_CLUSTER_NAME)'..."; \
 		kind create cluster --name $(KIND_CLUSTER_NAME); \
@@ -548,6 +551,71 @@ ci-test: install-terraform get-credentials install-priority-classes install-maes
 # CI-CLEANUP
 .PHONY: ci-cleanup
 ci-cleanup: uninstall-maestro destroy-terraform ## Ci cleanup: uninstall maestro + destroy terraform
+
+# ==== POC Multi-Tenancy Targets ====
+POC_MANIFESTS_DIR ?= manifests/poc-multitenancy
+MOCK_JWT_SERVER_DIR ?= mock-jwt-server
+
+.PHONY: install-authorino-operator
+install-authorino-operator: check-kubectl ## Install Authorino Operator (CRDs + cert-manager)
+	@echo "Installing Authorino Operator..."
+	@curl -sL https://raw.githubusercontent.com/Kuadrant/authorino-operator/main/utils/install.sh | bash -s
+	@echo "OK: Authorino Operator installed"
+
+.PHONY: install-authorino
+install-authorino: check-kubectl check-hyperfleet-namespace ## Deploy Authorino instance in hyperfleet namespace
+	@echo "Deploying Authorino instance..."
+	@kubectl -n $(NAMESPACE) apply -f $(POC_MANIFESTS_DIR)/authorino.yaml
+	@echo "Waiting for Authorino deployment..."
+	@kubectl -n $(NAMESPACE) wait --for=condition=Available deployment/authorino --timeout=120s || true
+	@echo "OK: Authorino deployed"
+
+.PHONY: build-mock-jwt-server
+build-mock-jwt-server: check-kind ## Build mock JWT server image and load into kind
+	@echo "Building mock-jwt-server image..."
+	@docker build -t mock-jwt-server:local $(MOCK_JWT_SERVER_DIR)
+	@kind load docker-image mock-jwt-server:local --name $(KIND_CLUSTER_NAME)
+	@echo "OK: mock-jwt-server image built and loaded"
+
+.PHONY: install-mock-jwt-server
+install-mock-jwt-server: check-kubectl check-hyperfleet-namespace ## Deploy mock JWT server
+	@echo "Deploying mock JWT server..."
+	@kubectl -n $(NAMESPACE) apply -f $(POC_MANIFESTS_DIR)/mock-jwt-server.yaml
+	@kubectl -n $(NAMESPACE) wait --for=condition=Available deployment/mock-jwt-server --timeout=60s
+	@echo "OK: mock JWT server deployed"
+
+.PHONY: install-envoy
+install-envoy: check-kubectl check-hyperfleet-namespace ## Deploy Envoy proxy with ext_authz
+	@echo "Deploying Envoy proxy..."
+	@kubectl -n $(NAMESPACE) apply -f $(POC_MANIFESTS_DIR)/envoy.yaml
+	@kubectl -n $(NAMESPACE) wait --for=condition=Available deployment/envoy --timeout=60s
+	@echo "OK: Envoy proxy deployed"
+
+.PHONY: install-authconfig
+install-authconfig: check-kubectl check-hyperfleet-namespace ## Apply AuthConfig (default: org+project model)
+	@echo "Applying AuthConfig (org+project model)..."
+	@kubectl -n $(NAMESPACE) apply -f $(POC_MANIFESTS_DIR)/authconfig-org-project.yaml
+	@echo "OK: AuthConfig applied"
+
+.PHONY: install-poc-gateway
+install-poc-gateway: install-authorino-operator install-authorino build-mock-jwt-server install-mock-jwt-server install-envoy install-authconfig ## Install complete POC gateway stack (Authorino + Envoy + mock JWT)
+
+.PHONY: uninstall-poc-gateway
+uninstall-poc-gateway: check-kubectl ## Uninstall POC gateway stack
+	@kubectl -n $(NAMESPACE) delete -f $(POC_MANIFESTS_DIR)/authconfig-org-project.yaml --ignore-not-found || true
+	@kubectl -n $(NAMESPACE) delete -f $(POC_MANIFESTS_DIR)/authconfig-team-user.yaml --ignore-not-found || true
+	@kubectl -n $(NAMESPACE) delete -f $(POC_MANIFESTS_DIR)/envoy.yaml --ignore-not-found || true
+	@kubectl -n $(NAMESPACE) delete -f $(POC_MANIFESTS_DIR)/mock-jwt-server.yaml --ignore-not-found || true
+	@kubectl -n $(NAMESPACE) delete -f $(POC_MANIFESTS_DIR)/authorino.yaml --ignore-not-found || true
+	@echo "OK: POC gateway stack uninstalled"
+
+.PHONY: poc-status
+poc-status: check-kubectl ## Show POC component status
+	@echo "=== POC Gateway Components ==="
+	@kubectl -n $(NAMESPACE) get pods -l 'app in (envoy,mock-jwt-server,authorino)' 2>/dev/null || true
+	@echo ""
+	@echo "=== AuthConfig ==="
+	@kubectl -n $(NAMESPACE) get authconfigs 2>/dev/null || true
 
 # ==== Full Deployment Targets ====
 # Kind targets
