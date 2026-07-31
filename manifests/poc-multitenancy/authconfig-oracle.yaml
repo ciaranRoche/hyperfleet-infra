@@ -1,0 +1,66 @@
+# Oracle-style tenant model: tenancy OCID (required) + compartment (optional).
+# Same structure as the on-prem AuthConfig, different claims and headers.
+# Swapping this file plus the API's tenant dimensions config changes the
+# entire tenant model with zero code changes in any component.
+apiVersion: authorino.kuadrant.io/v1beta3
+kind: AuthConfig
+metadata:
+  name: hyperfleet-tenant-policy
+  namespace: hyperfleet-local
+spec:
+  hosts:
+    - envoy.hyperfleet-local.svc.cluster.local
+    - envoy
+    - localhost
+  authentication:
+    "human-jwt":
+      jwt:
+        issuerUrl: http://mock-jwt-server.hyperfleet-local.svc:8080
+      credentials:
+        authorizationHeader: {}
+      defaults:
+        hf_system:
+          value: "false"
+    "machine-sa":
+      kubernetesTokenReview:
+        audiences:
+          - hyperfleet-api
+      defaults:
+        hf_system:
+          value: "true"
+  authorization:
+    "require-tenancy-ocid":
+      when:
+        - selector: auth.identity.hf_system
+          operator: neq
+          value: "true"
+      patternMatching:
+        patterns:
+          - selector: auth.identity.tenancy_ocid
+            operator: neq
+            value: ""
+    "restrict-system-subjects":
+      when:
+        - selector: auth.identity.hf_system
+          operator: eq
+          value: "true"
+      patternMatching:
+        patterns:
+          - selector: auth.identity.user.username
+            operator: matches
+            value: "^system:serviceaccount:hyperfleet-local:.*(hyperfleet-sentinel|hyperfleet-adapter)$"
+  response:
+    success:
+      headers:
+        x-hyperfleet-system:
+          plain:
+            selector: auth.identity.hf_system
+        x-hyperfleet-identity:
+          plain:
+            selector: auth.identity.email
+        x-tenant-tenancy-ocid:
+          plain:
+            selector: auth.identity.tenancy_ocid
+        x-tenant-compartment:
+          plain:
+            selector: auth.identity.compartment_id

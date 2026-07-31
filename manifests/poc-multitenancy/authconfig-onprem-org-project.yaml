@@ -1,0 +1,77 @@
+# On-prem tenant model: org (required) + project (optional).
+# Human callers authenticate with a JWT from the mock IdP; tenant identity
+# comes from the org_id and project_id claims. Machine callers (Sentinel,
+# adapters) authenticate with projected ServiceAccount tokens validated via
+# Kubernetes TokenReview and are marked as system identities.
+#
+# The hf_system extended property is the identity discriminator: `defaults`
+# merges it into auth.identity per authentication method, so authorization
+# rules and response headers can branch on it without duplicating blocks.
+# The x-hyperfleet-system header is emitted unconditionally (the API only
+# honors the literal "true"), so correctness never depends on header-level
+# conditions.
+apiVersion: authorino.kuadrant.io/v1beta3
+kind: AuthConfig
+metadata:
+  name: hyperfleet-tenant-policy
+  namespace: hyperfleet-local
+spec:
+  hosts:
+    - envoy.hyperfleet-local.svc.cluster.local
+    - envoy
+    - localhost
+  authentication:
+    "human-jwt":
+      jwt:
+        issuerUrl: http://mock-jwt-server.hyperfleet-local.svc:8080
+      credentials:
+        authorizationHeader: {}
+      defaults:
+        hf_system:
+          value: "false"
+    "machine-sa":
+      kubernetesTokenReview:
+        audiences:
+          - hyperfleet-api
+      defaults:
+        hf_system:
+          value: "true"
+  authorization:
+    # Non-system callers must carry the required tenant claim.
+    "require-org":
+      when:
+        - selector: auth.identity.hf_system
+          operator: neq
+          value: "true"
+      patternMatching:
+        patterns:
+          - selector: auth.identity.org_id
+            operator: neq
+            value: ""
+    # Only the known HyperFleet service accounts may act as system identities.
+    # Any other in-cluster SA with a hyperfleet-api-audience token is denied.
+    "restrict-system-subjects":
+      when:
+        - selector: auth.identity.hf_system
+          operator: eq
+          value: "true"
+      patternMatching:
+        patterns:
+          - selector: auth.identity.user.username
+            operator: matches
+            value: "^system:serviceaccount:hyperfleet-local:.*(hyperfleet-sentinel|hyperfleet-adapter)$"
+  response:
+    success:
+      headers:
+        x-hyperfleet-system:
+          plain:
+            selector: auth.identity.hf_system
+        x-hyperfleet-identity:
+          plain:
+            selector: auth.identity.email
+        x-tenant-org:
+          plain:
+            selector: auth.identity.org_id
+        x-tenant-project:
+          plain:
+            selector: auth.identity.project_id

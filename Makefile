@@ -568,13 +568,19 @@ install-authorino: check-kubectl check-hyperfleet-namespace ## Deploy Authorino 
 	@kubectl -n $(NAMESPACE) apply -f $(POC_MANIFESTS_DIR)/authorino.yaml
 	@echo "Waiting for Authorino deployment..."
 	@kubectl -n $(NAMESPACE) wait --for=condition=Available deployment/authorino --timeout=120s || true
+	@echo "Granting TokenReview access to the Authorino service account..."
+	@AUTHORINO_SA=$$(kubectl -n $(NAMESPACE) get deployment/authorino -o jsonpath='{.spec.template.spec.serviceAccountName}'); \
+	kubectl create clusterrolebinding authorino-tokenreview \
+		--clusterrole=system:auth-delegator \
+		--serviceaccount=$(NAMESPACE):$$AUTHORINO_SA \
+		--dry-run=client -o yaml | kubectl apply -f -
 	@echo "OK: Authorino deployed"
 
 .PHONY: build-mock-jwt-server
 build-mock-jwt-server: check-kind ## Build mock JWT server image and load into kind
 	@echo "Building mock-jwt-server image..."
-	@docker build -t mock-jwt-server:local $(MOCK_JWT_SERVER_DIR)
-	@kind load docker-image mock-jwt-server:local --name $(KIND_CLUSTER_NAME)
+	@$(CONTAINER_TOOL) build -t mock-jwt-server:local $(MOCK_JWT_SERVER_DIR)
+	@$(CONTAINER_TOOL) save mock-jwt-server:local | kind load image-archive /dev/stdin --name $(KIND_CLUSTER_NAME)
 	@echo "OK: mock-jwt-server image built and loaded"
 
 .PHONY: install-mock-jwt-server
@@ -591,19 +597,36 @@ install-envoy: check-kubectl check-hyperfleet-namespace ## Deploy Envoy proxy wi
 	@kubectl -n $(NAMESPACE) wait --for=condition=Available deployment/envoy --timeout=60s
 	@echo "OK: Envoy proxy deployed"
 
+# Tenant model selection: onprem (org+project) or oracle (tenancy OCID+compartment).
+# One AuthConfig file per model; both share the AuthConfig name so applying one
+# replaces the other's policy for the same hosts.
+TENANT_MODEL ?= onprem
+ifeq ($(TENANT_MODEL),oracle)
+AUTHCONFIG_FILE = authconfig-oracle.yaml
+else
+AUTHCONFIG_FILE = authconfig-onprem-org-project.yaml
+endif
+
 .PHONY: install-authconfig
-install-authconfig: check-kubectl check-hyperfleet-namespace ## Apply AuthConfig (default: org+project model)
-	@echo "Applying AuthConfig (org+project model)..."
-	@kubectl -n $(NAMESPACE) apply -f $(POC_MANIFESTS_DIR)/authconfig-org-project.yaml
+install-authconfig: check-kubectl check-hyperfleet-namespace ## Apply AuthConfig for TENANT_MODEL (onprem|oracle)
+	@echo "Applying AuthConfig (model: $(TENANT_MODEL))..."
+	@kubectl -n $(NAMESPACE) apply -f $(POC_MANIFESTS_DIR)/$(AUTHCONFIG_FILE)
 	@echo "OK: AuthConfig applied"
+
+.PHONY: poc-switch-model
+poc-switch-model: install-authconfig ## Switch tenant model: re-apply AuthConfig, then reinstall the API with matching dimensions
+	@echo "AuthConfig switched to $(TENANT_MODEL). Reinstall the API with matching"
+	@echo "tenant dimensions, e.g.:"
+	@echo "  make install-hyperfleet TENANT_MODEL=$(TENANT_MODEL) JWT_AUTH_ENABLED=true"
 
 .PHONY: install-poc-gateway
 install-poc-gateway: install-authorino-operator install-authorino build-mock-jwt-server install-mock-jwt-server install-envoy install-authconfig ## Install complete POC gateway stack (Authorino + Envoy + mock JWT)
 
 .PHONY: uninstall-poc-gateway
 uninstall-poc-gateway: check-kubectl ## Uninstall POC gateway stack
-	@kubectl -n $(NAMESPACE) delete -f $(POC_MANIFESTS_DIR)/authconfig-org-project.yaml --ignore-not-found || true
-	@kubectl -n $(NAMESPACE) delete -f $(POC_MANIFESTS_DIR)/authconfig-team-user.yaml --ignore-not-found || true
+	@kubectl -n $(NAMESPACE) delete -f $(POC_MANIFESTS_DIR)/authconfig-onprem-org-project.yaml --ignore-not-found || true
+	@kubectl -n $(NAMESPACE) delete -f $(POC_MANIFESTS_DIR)/authconfig-oracle.yaml --ignore-not-found || true
+	@kubectl delete clusterrolebinding authorino-tokenreview --ignore-not-found || true
 	@kubectl -n $(NAMESPACE) delete -f $(POC_MANIFESTS_DIR)/envoy.yaml --ignore-not-found || true
 	@kubectl -n $(NAMESPACE) delete -f $(POC_MANIFESTS_DIR)/mock-jwt-server.yaml --ignore-not-found || true
 	@kubectl -n $(NAMESPACE) delete -f $(POC_MANIFESTS_DIR)/authorino.yaml --ignore-not-found || true

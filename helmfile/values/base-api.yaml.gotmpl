@@ -61,7 +61,36 @@ config:
     - kind: WifConfig
       plural: wifconfigs
       spec_schema_name: WifConfigSpec
-  {{ if eq (env "JWT_AUTH_ENABLED" | default "false") "true" }}
+  {{ if eq (env "TENANT_ENFORCEMENT" | default "false") "true" }}
+  {{/* Tenant enforcement (multitenancy POC): dimensions must mirror the
+       response headers of the applied Authorino AuthConfig for the same
+       TENANT_MODEL. The gateway is the authn boundary; the API trusts
+       these headers. */}}
+  tenant:
+    enabled: true
+    system_header: "X-HyperFleet-System"
+    dimensions:
+    {{ if eq (env "TENANT_MODEL" | default "onprem") "oracle" }}
+      - header: "X-Tenant-Tenancy-Ocid"
+        key: "tenancy_ocid"
+        required: true
+      - header: "X-Tenant-Compartment"
+        key: "compartment"
+        required: false
+    {{ else }}
+      - header: "X-Tenant-Org"
+        key: "org"
+        required: true
+      - header: "X-Tenant-Project"
+        key: "project"
+        required: false
+    {{ end }}
+  {{ end }}
+  {{/* With tenant enforcement the gateway (Envoy + Authorino) is the authn
+       boundary: clients still send SA tokens (JWT_AUTH_ENABLED gates that in
+       the sentinel/adapter values), but the API's in-app JWT stays off and
+       Authorino validates tokens instead. */}}
+  {{ if and (eq (env "JWT_AUTH_ENABLED" | default "false") "true") (ne (env "TENANT_ENFORCEMENT" | default "false") "true") }}
   server:
     jwt:
       enabled: true

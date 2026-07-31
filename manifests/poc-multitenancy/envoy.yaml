@@ -19,6 +19,25 @@ data:
                   typed_config:
                     "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                     stat_prefix: ingress_http
+                    # Strip client-supplied identity headers BEFORE the filter
+                    # chain runs. Route-level request_headers_to_remove is
+                    # applied by the router filter AFTER ext_authz, which would
+                    # also strip the headers Authorino injects. Early header
+                    # mutation runs first, so forged client headers die here
+                    # and Authorino's injected headers survive. The list is a
+                    # superset of both tenant models so one Envoy config
+                    # serves either AuthConfig.
+                    early_header_mutation_extensions:
+                      - name: envoy.http.early_header_mutation.header_mutation
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.http.early_header_mutation.header_mutation.v3.HeaderMutation
+                          mutations:
+                            - remove: x-tenant-org
+                            - remove: x-tenant-project
+                            - remove: x-tenant-tenancy-ocid
+                            - remove: x-tenant-compartment
+                            - remove: x-hyperfleet-system
+                            - remove: x-hyperfleet-identity
                     http_filters:
                       - name: envoy.filters.http.ext_authz
                         typed_config:
@@ -34,12 +53,6 @@ data:
                           "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
                     route_config:
                       name: local_route
-                      request_headers_to_remove:
-                        - x-hyperfleet-identity
-                        - x-tenant-org
-                        - x-tenant-project
-                        - x-tenant-team
-                        - x-tenant-user
                       virtual_hosts:
                         - name: upstream
                           domains:
