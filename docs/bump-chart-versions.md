@@ -12,16 +12,26 @@ oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/
 
 ## Chart Version Variables
 
-Three environment variables control which chart versions are deployed:
+Environment variables control which charts are deployed and from where:
 
-| Variable | Default | Component |
-|----------|---------|-----------|
-| `API_CHART_VERSION` | `0.3.1` | hyperfleet-api-chart |
-| `SENTINEL_CHART_VERSION` | `0.3.1` | hyperfleet-sentinel-chart |
-| `ADAPTER_CHART_VERSION` | `0.3.1` | hyperfleet-adapter-chart |
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CHART_REGISTRY` | `oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet` | OCI registry base path |
+| `API_CHART_VERSION` | `` (empty) | hyperfleet-api-chart version |
+| `SENTINEL_CHART_VERSION` | `` (empty) | hyperfleet-sentinel-chart version |
+| `ADAPTER_CHART_VERSION` | `` (empty) | hyperfleet-adapter-chart version |
 
 These are defined in `helmfile/helmfile.yaml.gotmpl` and can be overridden via environment variables or `env.gcp`/`env.kind`.
 
+**Chart Registry**: Override `CHART_REGISTRY` to pull charts from a fork or alternative registry:
+```bash
+# Use charts from a personal fork
+CHART_REGISTRY=oci://quay.io/myusername/hyperfleet make install-hyperfleet
+```
+
+**Chart Versions**: 
+- **Empty (default)**: Pulls the latest SemVer tag with Helm < 3.8. **Note**: Helm 3.8+ requires explicit versions; empty version will fail.
+- **Pinned**: Set to a specific SemVer version (e.g., `0.3.1`) for production deployments or version testing.
 ## Listing Available Versions
 
 ### Via Quay UI
@@ -46,10 +56,10 @@ skopeo list-tags docker://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfl
 ### Option 1: Override via CLI (temporary, one-time)
 
 ```bash
-# Upgrade all three charts to 0.3.2
-API_CHART_VERSION=0.3.2 \
-SENTINEL_CHART_VERSION=0.3.2 \
-ADAPTER_CHART_VERSION=0.3.2 \
+# Upgrade all three charts to 0.3.1
+API_CHART_VERSION=0.3.1 \
+SENTINEL_CHART_VERSION=0.3.1 \
+ADAPTER_CHART_VERSION=0.3.1 \
 make install-hyperfleet
 ```
 
@@ -59,9 +69,9 @@ Edit `env.gcp` or `env.kind`:
 
 ```bash
 # Add or update these lines
-export API_CHART_VERSION=0.3.2
-export SENTINEL_CHART_VERSION=0.3.2
-export ADAPTER_CHART_VERSION=0.3.2
+export API_CHART_VERSION=0.3.1
+export SENTINEL_CHART_VERSION=0.3.1
+export ADAPTER_CHART_VERSION=0.3.1
 ```
 
 Then deploy normally:
@@ -78,11 +88,11 @@ Edit `helmfile/helmfile.yaml.gotmpl`:
 values:
   - charts:
       api:
-        version: {{ env "API_CHART_VERSION" | default "0.3.2" }}
+        version: {{ env "API_CHART_VERSION" | default "0.3.1" }}
       sentinel:
-        version: {{ env "SENTINEL_CHART_VERSION" | default "0.3.2" }}
+        version: {{ env "SENTINEL_CHART_VERSION" | default "0.3.1" }}
       adapter:
-        version: {{ env "ADAPTER_CHART_VERSION" | default "0.3.2" }}
+        version: {{ env "ADAPTER_CHART_VERSION" | default "0.3.1" }}
 ```
 
 Commit and create a PR. After merge, all users get the new defaults.
@@ -95,7 +105,7 @@ When all three component repos publish the same version:
 
 ```bash
 # Single version bump for all charts
-export CHART_VERSION=0.3.2
+export CHART_VERSION=0.3.1
 API_CHART_VERSION=$CHART_VERSION \
 SENTINEL_CHART_VERSION=$CHART_VERSION \
 ADAPTER_CHART_VERSION=$CHART_VERSION \
@@ -108,10 +118,10 @@ When components have different versions (e.g., hotfix for API only):
 
 ```bash
 # Bump only API chart
-API_CHART_VERSION=0.3.2 make install-api
+API_CHART_VERSION=0.3.1 make install-api
 
 # Or bump all with different versions
-API_CHART_VERSION=0.3.2 \
+API_CHART_VERSION=0.3.1 \
 SENTINEL_CHART_VERSION=0.3.1 \
 ADAPTER_CHART_VERSION=0.3.1 \
 make install-hyperfleet
@@ -122,22 +132,26 @@ make install-hyperfleet
 After deploying with new chart versions:
 
 ```bash
+# Export NAMESPACE explicitly based on your environment
+export NAMESPACE=hyperfleet-local  # for kind
+# export NAMESPACE=hyperfleet       # for gcp
+
 # Check deployed chart versions
-helm list -n hyperfleet
+helm list -n "$NAMESPACE"
 
 # Inspect a specific release
-helm get values hyperfleet-api -n hyperfleet
+helm get values hyperfleet-api -n "$NAMESPACE"
 
 # Verify chart metadata
-helm get metadata hyperfleet-api -n hyperfleet
+helm get metadata hyperfleet-api -n "$NAMESPACE"
 ```
 
 ## Troubleshooting
 
 ### Chart version not found
 
-```
-Error: failed to download "hyperfleet-charts/hyperfleet-api-chart" at version "0.3.2"
+```bash
+Error: failed to download "oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api-chart" at version "0.3.1"
 ```
 
 **Cause:** The requested chart version doesn't exist on Quay.
@@ -170,15 +184,34 @@ Error: improper constraint: 0.1.515_aff8821
 
 ## Rollback
 
-To rollback to a previous chart version:
+### Redeploy a Previous Chart Version
+
+To deploy a previous chart version (not a Helm revision rollback):
 
 ```bash
-# Rollback API to 0.3.0
+# Redeploy API with chart version 0.3.0
 API_CHART_VERSION=0.3.0 make install-api
-
-# Or rollback via helm directly
-helm rollback hyperfleet-api -n hyperfleet
 ```
+
+This pulls chart version `0.3.0` from the registry and deploys it as a new Helm revision.
+
+### Rollback to a Previous Helm Revision
+
+To undo a deployment and restore a previous Helm release state:
+
+```bash
+# Export NAMESPACE explicitly based on your environment
+export NAMESPACE=hyperfleet-local  # for kind
+# export NAMESPACE=hyperfleet       # for gcp
+
+# Check release history
+helm history hyperfleet-api -n "$NAMESPACE"
+
+# Rollback to a specific revision (e.g., revision 3)
+helm rollback hyperfleet-api 3 -n "$NAMESPACE"
+```
+
+This restores the exact state of revision 3, including its chart version and values.
 
 ## Related
 

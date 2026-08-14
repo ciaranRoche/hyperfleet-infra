@@ -12,6 +12,7 @@ helmDefaults:
 values:
   - namespace: {{ requiredEnv "NAMESPACE" }}
   - charts:
+      registry: {{ env "CHART_REGISTRY" | default "oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet" }}
       api:
         version: {{ env "API_CHART_VERSION" | default "0.3.1" }}
       sentinel:
@@ -68,8 +69,10 @@ releases:
   # HyperFleet API
   - name: hyperfleet-api
     namespace: {{ .Values.namespace }}
-    chart: oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api-chart
+    chart: {{ .Values.charts.registry }}/hyperfleet-api-chart
+{{ if .Values.charts.api.version }}
     version: {{ .Values.charts.api.version }}
+{{ end }}
     labels:
       component: api
     values:
@@ -88,8 +91,10 @@ releases:
 {{ range .Values.sentinels }}
   - name: {{ .name }}
     namespace: {{ $.Values.namespace }}
-    chart: oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-sentinel-chart
+    chart: {{ $.Values.charts.registry }}/hyperfleet-sentinel-chart
+{{ if $.Values.charts.sentinel.version }}
     version: {{ $.Values.charts.sentinel.version }}
+{{ end }}
     needs:
       - hyperfleet-api
       - hyperfleet-gateway
@@ -109,8 +114,10 @@ releases:
 {{ range .Values.adapters }}
   - name: {{ .name }}
     namespace: {{ $.Values.namespace }}
-    chart: oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-adapter-chart
+    chart: {{ $.Values.charts.registry }}/hyperfleet-adapter-chart
+{{ if $.Values.charts.adapter.version }}
     version: {{ $.Values.charts.adapter.version }}
+{{ end }}
     needs:
       - hyperfleet-api
       - hyperfleet-gateway
