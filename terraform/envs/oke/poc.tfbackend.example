@@ -1,0 +1,4 @@
+# Copy to poc-<your-name>.tfbackend and fill in the shared state bucket
+# (same bucket the GKE stacks use, see terraform/bootstrap/setup-backend.sh)
+bucket = "REPLACE_WITH_STATE_BUCKET"
+prefix = "hyperfleet-oci/poc"
