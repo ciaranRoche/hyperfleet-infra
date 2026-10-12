@@ -43,6 +43,14 @@ spec:
                   key: JSON_CONFIG
             - name: SERVER_PORT
               value: {{ .Values.service.port | quote }}
+          startupProbe:
+            httpGet:
+              path: /isalive
+              port: {{ ternary "https" "http" .Values.tls.enabled }}
+              scheme: {{ ternary "HTTPS" "HTTP" .Values.tls.enabled }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
           readinessProbe:
             httpGet:
               path: /isalive

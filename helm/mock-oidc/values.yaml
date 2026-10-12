@@ -24,13 +24,19 @@ tls:
 
 resources:
   requests:
-    cpu: 50m
+    cpu: 250m
     memory: 128Mi
   limits:
-    cpu: 250m
+    cpu: "1"
     memory: 256Mi
 
 probes:
+  # JVM + TLS startup needs ~2-3 CPU-seconds; with a small CPU share on a busy
+  # node that can exceed the liveness budget, so gate liveness behind startup.
+  startup:
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 36
   readiness:
     initialDelaySeconds: 2
     periodSeconds: 5
@@ -38,7 +44,7 @@ probes:
   liveness:
     initialDelaySeconds: 5
     periodSeconds: 10
-    timeoutSeconds: 2
+    timeoutSeconds: 5
     failureThreshold: 3
 
 securityContext:
