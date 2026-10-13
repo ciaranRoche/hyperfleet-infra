@@ -1,0 +1,7 @@
+approvers:
+- e2e-owners
+reviewers:
+- e2e-reviewers
+- e2e-owners
+labels:
+- area/e2e

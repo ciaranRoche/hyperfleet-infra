@@ -1,0 +1,34 @@
+aliases:
+  e2e-owners:
+  - kuudori
+  - ma-hill
+  e2e-reviewers:
+  - pnguyen44
+  - tirthct
+  - Mischulee
+  - mliptak0
+  gateway-owners:
+  - mliptak0
+  - kuudori
+  gateway-reviewers:
+  - ldornele
+  - pnguyen44
+  infra-owners:
+  - ma-hill
+  - kuudori
+  - rafabene
+  infra-reviewers:
+  - mliptak0
+  - pnguyen44
+  - tirthct
+  oci-owners:
+  - rafabene
+  - ciaranRoche
+  oci-reviewers:
+  - pnguyen44
+  - ldornele
+  - Mischulee
+  tech-leads:
+  - ciaranRoche
+  - rafabene
+  - rh-amarin

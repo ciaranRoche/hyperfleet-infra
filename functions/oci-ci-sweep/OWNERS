@@ -1,0 +1,7 @@
+approvers:
+- oci-owners
+reviewers:
+- oci-reviewers
+- oci-owners
+labels:
+- area/oci

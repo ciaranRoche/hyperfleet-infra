@@ -1,0 +1,7 @@
+approvers:
+- gateway-owners
+reviewers:
+- gateway-reviewers
+- gateway-owners
+labels:
+- area/gateway
