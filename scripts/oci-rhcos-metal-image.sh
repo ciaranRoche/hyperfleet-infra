@@ -108,7 +108,10 @@ run_installer() {
     else
         need_cmd podman
         echo "build: coreos-installer not installed, using quay.io/coreos/coreos-installer:release"
-        podman run --rm --privileged -v /dev:/dev -v "${WORKDIR}/downloads:${WORKDIR}/downloads" \
+        # /run/udev is needed so coreos-installer can settle the partition table
+        # after writing, as in the upstream documented podman invocation.
+        podman run --rm --privileged -v /dev:/dev -v /run/udev:/run/udev \
+            -v "${WORKDIR}/downloads:${WORKDIR}/downloads" \
             quay.io/coreos/coreos-installer:release "$@"
     fi
 }
@@ -129,8 +132,12 @@ do_build() {
     # shellcheck disable=SC2064  # expand loop now, it is what we want to detach
     trap "losetup -d '${loop}' 2>/dev/null || true" EXIT
 
+    # The RHCOS streams publish no GPG signature for the metal artifact
+    # (stream JSON "signature": null), so coreos-installer cannot verify one.
+    # --insecure skips only that check; the sha256 from the stream JSON was
+    # verified by do_download, which is the same trust anchor.
     local start=${SECONDS}
-    run_installer install --platform "${PLATFORM}" --image-file "${METAL_FILE}" "${loop}"
+    run_installer install --platform "${PLATFORM}" --insecure --image-file "${METAL_FILE}" "${loop}"
     echo "build: coreos-installer done in $((SECONDS - start))s"
 
     verify_loop "${loop}"
