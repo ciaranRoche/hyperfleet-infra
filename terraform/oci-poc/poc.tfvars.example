@@ -1,0 +1,20 @@
+# Copy to poc.tfvars (gitignored) and fill in the two placeholders.
+tenancy_ocid       = "ocid1.tenancy.oc1..aaaaaaaayikwwnfeirfik6fwqdt5rfjfajmwjuj5u34vkbpao5u6hohucnsa"
+poc_compartment_id = "ocid1.compartment.oc1..aaaaaaaaz57fcqgpzz3nagwazbfh5swqmnkpusst7feuqpnllbletmexteqa"
+
+# Your kerberos id, applied as the `owner` tag on everything.
+owner = "REPLACE_WITH_KERBEROS"
+
+# Addresses allowed to reach the Kubernetes API on 6443. `curl -4 ifconfig.me`
+# gives you yours; add a /32.
+allowed_cidrs = ["REPLACE_WITH_PUBLIC_IP/32"]
+
+# Auth: ApiKey (default) reads the [DEFAULT] profile's user/fingerprint/key
+# unless these are set. With a named profile, pass its values explicitly:
+# oci_user_ocid        = "ocid1.user.oc1..."
+# oci_fingerprint      = "aa:bb:..."
+# oci_private_key_path = "~/.oci/oci_api_key.pem"
+
+# Sizing defaults (see variables.tf): v1.37.0, 3 x VM.Standard.E5.Flex at
+# 4 OCPU / 32 GB, 100 GB boot volumes, service VCN 10.60.0.0/16, customers
+# 10.70.0.0/16 and 10.71.0.0/16.

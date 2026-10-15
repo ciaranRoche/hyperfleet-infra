@@ -46,6 +46,7 @@ MANIFESTS_DIR    ?= manifests
 HELM_DIR         ?= helm
 TF_DIR           ?= terraform
 OCI_TF_DIR       ?= terraform/oci
+OCI_POC_TF_DIR   ?= terraform/oci-poc
 GENERATED_RABBITMQ_DIR ?= generated-values-rabbitmq
 GENERATED_DIR ?= generated-values-from-terraform
 RABBITMQ_URL ?=  "amqp://guest:guest@rabbitmq:5672"
@@ -679,7 +680,7 @@ help: ## Show this help message
 .PHONY: validate-terraform
 validate-terraform: check-terraform ## Validate Terraform syntax and formatting (all stacks)
 	cd $(TF_DIR) && terraform fmt -check -recursive -diff
-	@for dir in $(TF_DIR) $(OCI_TF_DIR); do \
+	@for dir in $(TF_DIR) $(OCI_TF_DIR) $(OCI_POC_TF_DIR) $(OCI_POC_TF_DIR)/compartments; do \
 		echo "Validating Terraform in $$dir..."; \
 		( cd "$$dir" && terraform init -backend=false && terraform validate ) || exit 1; \
 	done

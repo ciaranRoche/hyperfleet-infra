@@ -13,7 +13,7 @@ Infrastructure as code that provisions HyperFleet dev and e2e environments with 
 ## Validation commands
 
 ```bash
-make ci-validate     # terraform fmt + validate (terraform/ and terraform/oci/), helm lint, shellcheck, authorino templates
+make ci-validate     # terraform fmt + validate (terraform/, terraform/oci/ and terraform/oci-poc/), helm lint, shellcheck, authorino templates
 make ci-dry-run      # ci-validate + GKE network policy mode tests + render checks: network policies, namespace cleaner, desire delivery
 ```
 
@@ -63,6 +63,7 @@ Every environment delivers through API → Sentinel → remote adapter → Redis
 - Format from `terraform/`: `terraform fmt -recursive`. The check is `terraform fmt -check -recursive -diff`.
 - Per-developer GKE setup (one time): copy `terraform/envs/gke/dev.tfvars.example` and `dev.tfbackend.example` to `dev-<username>.*`, then set `developer_name` and the state `prefix`. These files are gitignored, so never commit them. Remote state lives in the GCS bucket `hyperfleet-terraform-state`.
 - `terraform/oci/` is a separate stack for the OCI CI compartment (quota, budget, sweep function). See `terraform/oci/README.md`.
+- `terraform/oci-poc/` is a separate stack for the OCI proof-of-concept environment (sibling compartments, VCNs, DRG, Enhanced OKE). See `terraform/oci-poc/README.md`.
 
 ## Helm charts
 

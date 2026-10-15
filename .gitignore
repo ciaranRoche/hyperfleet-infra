@@ -20,6 +20,11 @@ terraform/envs/gke/ci-*.tfbackend
 # OCI CI stack personal config (keep the examples)
 terraform/oci/ci.tfvars
 terraform/oci/ci.tfbackend
+# OCI POC stack personal config (keep the examples)
+terraform/oci-poc/poc.tfvars
+terraform/oci-poc/poc.tfbackend
+terraform/oci-poc/compartments/poc.tfvars
+terraform/oci-poc/compartments/poc.tfbackend
 *.tfvars.bak
 *.tfbackend.bak
 

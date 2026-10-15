@@ -1,0 +1,4 @@
+# Copy to poc.tfvars (gitignored) and fill in the placeholder.
+tenancy_ocid       = "ocid1.tenancy.oc1..aaaaaaaayikwwnfeirfik6fwqdt5rfjfajmwjuj5u34vkbpao5u6hohucnsa"
+poc_compartment_id = "ocid1.compartment.oc1..aaaaaaaaz57fcqgpzz3nagwazbfh5swqmnkpusst7feuqpnllbletmexteqa"
+owner              = "REPLACE_WITH_KERBEROS"
