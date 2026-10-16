@@ -1,12 +1,14 @@
 
 .DEFAULT_GOAL := help
 
-# Possible envs are gcp, e2e-gcp, kind, e2e-kind
+# Possible envs are gcp, e2e-gcp, kind, e2e-kind, oci
 # Default to gcp
 HELMFILE_ENV ?= gcp
 
 
-ifeq ($(findstring gcp,$(HELMFILE_ENV)),)
+ifeq ($(HELMFILE_ENV),oci)
+	-include env.oci
+else ifeq ($(findstring gcp,$(HELMFILE_ENV)),)
 	-include env.kind
 else
 	-include env.gcp

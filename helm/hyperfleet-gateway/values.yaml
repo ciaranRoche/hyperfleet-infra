@@ -11,7 +11,7 @@ fullnameOverride: ""
 # -----------------------------------------------------------------------------
 image:
   registry: ""
-  repository: envoyproxy/envoy
+  repository: docker.io/envoyproxy/envoy
   tag: v1.39.1
   pullPolicy: IfNotPresent
 
@@ -91,7 +91,7 @@ tls:
   certificateWaiter:
     enabled: true
     image:
-      repository: alpine/k8s@sha256:15cfdf84d6de3559bc54d7479eb4e8aadbf71f6d7f08782cb1e91f3446f4b2d8
+      repository: docker.io/alpine/k8s@sha256:15cfdf84d6de3559bc54d7479eb4e8aadbf71f6d7f08782cb1e91f3446f4b2d8
       pullPolicy: IfNotPresent
     timeoutSeconds: 300
     resources:
@@ -177,7 +177,7 @@ auth:
     audience: hyperfleet-api
     tokenDuration: 300
     lifecycle:
-      image: bitnami/kubectl:1.33.4-debian-12-r0@sha256:ed0b31a0508da84ee655c5c6e01bd3897fc56ad6cf69debb27fa1893a06d2246
+      image: docker.io/bitnami/kubectl:1.33.4-debian-12-r0@sha256:ed0b31a0508da84ee655c5c6e01bd3897fc56ad6cf69debb27fa1893a06d2246
       pullPolicy: IfNotPresent
       resources:
         requests:

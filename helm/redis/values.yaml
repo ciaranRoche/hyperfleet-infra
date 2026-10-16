@@ -5,7 +5,7 @@
 # client pods in networkPolicy.allowedClients.
 
 image:
-  repository: redis
+  repository: docker.io/library/redis
   tag: 7-alpine
   pullPolicy: IfNotPresent
 

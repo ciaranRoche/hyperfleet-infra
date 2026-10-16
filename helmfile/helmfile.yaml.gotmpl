@@ -32,7 +32,7 @@ values:
       applier:
         chartRef: {{ env "APPLIER_CHART_REF" | default "main" }}
 
-# Environment configurations - e2e, e2e-kind, kind, gcp
+# Environment configurations - e2e, e2e-kind, kind, oci, gcp
 environments:
   e2e-gcp:
     values:
@@ -55,6 +55,12 @@ environments:
         gatewayServiceType: {{ env "GATEWAY_SERVICE_TYPE" | default "ClusterIP" }}
       - environments/kind/adapter-configs.yaml.gotmpl
       - environments/kind/sentinel-configs.yaml.gotmpl
+  oci:
+    values:
+      - brokerType: rabbitmq
+        gatewayServiceType: {{ env "GATEWAY_SERVICE_TYPE" | default "ClusterIP" }}
+      - environments/oci/adapter-configs.yaml.gotmpl
+      - environments/oci/sentinel-configs.yaml
   gcp:
     values:
       - projectId: {{ env "PROJECT_ID" | default "hcm-hyperfleet" }}

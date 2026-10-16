@@ -3,7 +3,7 @@
 # For production, use the official Bitnami RabbitMQ chart
 
 image:
-  repository: rabbitmq
+  repository: docker.io/library/rabbitmq
   tag: 3.13-management-alpine
   pullPolicy: IfNotPresent
 

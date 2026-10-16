@@ -1,0 +1,71 @@
+# HyperShift HostedCluster for a HyperFleet cluster, platform None, published
+# privately: all four control plane services are hostname Routes behind the
+# per-cluster router, whose Service the management cluster's admission policy
+# turns into an internal OCI load balancer with DNS hostnames.
+apiVersion: hypershift.openshift.io/v1beta1
+kind: HostedCluster
+metadata:
+  name: "{{ .clusterName }}"
+  namespace: "{{ .clustersNamespace }}"
+  labels:
+    hyperfleet.io/cluster-id: "{{ .resourceId }}"
+    hyperfleet.io/managed-by: "{{ .adapter.name }}"
+  annotations:
+    hyperfleet.io/generation: "{{ .generation }}"
+    # No SCC admission on a non-OpenShift management cluster.
+    hypershift.openshift.io/pod-security-admission-label-override: privileged
+spec:
+  infraID: "{{ .clusterName }}"
+  release:
+    image: "quay.io/openshift-release-dev/ocp-release:{{ .version }}-x86_64"
+  pullSecret:
+    name: "{{ .pullSecretName }}"
+  platform:
+    type: None
+  controllerAvailabilityPolicy: "{{ .availability }}"
+  infrastructureAvailabilityPolicy: "{{ .availability }}"
+  dns:
+    baseDomain: "{{ .baseDomain }}"
+  networking:
+    networkType: OVNKubernetes
+    clusterNetwork:
+      - cidr: "{{ .clusterNetworkCidr }}"
+    serviceNetwork:
+      - cidr: "{{ .serviceNetworkCidr }}"
+  etcd:
+    managementType: Managed
+    managed:
+      storage:
+        type: PersistentVolume
+        persistentVolume:
+          size: 8Gi
+          storageClassName: "{{ .etcdStorageClass }}"
+  services:
+    - service: APIServer
+      servicePublishingStrategy:
+        type: Route
+        route:
+          hostname: "api.{{ .clusterName }}.{{ .baseDomain }}"
+    - service: OAuthServer
+      servicePublishingStrategy:
+        type: Route
+        route:
+          hostname: "oauth.{{ .clusterName }}.{{ .baseDomain }}"
+    - service: Konnectivity
+      servicePublishingStrategy:
+        type: Route
+        route:
+          hostname: "konnectivity.{{ .clusterName }}.{{ .baseDomain }}"
+    - service: Ignition
+      servicePublishingStrategy:
+        type: Route
+        route:
+          hostname: "ignition.{{ .clusterName }}.{{ .baseDomain }}"
+  operatorConfiguration:
+    # The default IngressController's publishing is fixed when it is created.
+    ingressOperator:
+      endpointPublishingStrategy:
+        type: LoadBalancerService
+        loadBalancer:
+          scope: External
+          dnsManagementPolicy: Unmanaged

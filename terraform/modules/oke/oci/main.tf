@@ -80,6 +80,12 @@ resource "oci_containerengine_node_pool" "this" {
   node_shape         = var.node_shape
   freeform_tags      = var.freeform_tags
 
+  node_pool_cycling_details {
+    is_node_cycling_enabled = var.node_cycling
+    maximum_surge           = "1"
+    maximum_unavailable     = "0"
+  }
+
   node_shape_config {
     ocpus         = var.node_ocpus
     memory_in_gbs = var.node_memory_gbs

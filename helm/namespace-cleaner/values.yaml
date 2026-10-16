@@ -2,7 +2,7 @@
 
 # alpine/k8s includes kubectl and bash
 image:
-  repository: alpine/k8s@sha256:15cfdf84d6de3559bc54d7479eb4e8aadbf71f6d7f08782cb1e91f3446f4b2d8
+  repository: docker.io/alpine/k8s@sha256:15cfdf84d6de3559bc54d7479eb4e8aadbf71f6d7f08782cb1e91f3446f4b2d8
   pullPolicy: IfNotPresent
 
 # Cron schedule for the cleaner job (default: every hour)

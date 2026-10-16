@@ -1,0 +1,182 @@
+schema_version: "2.0"
+
+# HyperFleet node pool -> HyperShift NodePool (platform None). Node pool spec
+# fields use the PRD's vocabulary:
+#   count, shape, ocpus, memory_gb, boot_volume_gb, image_id,
+#   compartment_id, subnet_id, nsg_ids, fault_domains   (for the launcher)
+#   labels, taints                                       (recorded on the NodePool)
+# Status reports where the launcher finds the user-data (a secret reference
+# and the config version), never the user-data or its token.
+
+params:
+  - name: nodepoolId
+    source: event.id
+    type: string
+    required: true
+  - name: clusterId
+    source: event.owner_references.id
+    type: string
+    required: true
+  - name: clustersNamespace
+    source: env.CLUSTERS_NAMESPACE
+    type: string
+    required: true
+
+  - name: nodepool
+    source:
+      api_call:
+        method: GET
+        url: "/clusters/{{ .clusterId }}/nodepools/{{ .nodepoolId }}"
+        timeout: 10s
+        retry_attempts: 3
+        retry_backoff: exponential
+  - name: cluster
+    source:
+      api_call:
+        method: GET
+        url: "/clusters/{{ .clusterId }}"
+        timeout: 10s
+        retry_attempts: 3
+        retry_backoff: exponential
+
+  - name: clusterName
+    source: cluster.name
+  - name: nodepoolName
+    source: nodepool.name
+  - name: hsNodePoolName
+    source:
+      expression: 'cluster.name + "-" + nodepool.name'
+  - name: generation
+    source: nodepool.generation
+    type: int
+  - name: is_deleting
+    source:
+      expression: "nodepool.?deleted_time.hasValue()"
+  - name: version
+    source:
+      expression: 'nodepool.?spec.?version.orValue(cluster.?spec.?version.orValue("4.22.18"))'
+  - name: count
+    source:
+      expression: 'nodepool.?spec.?count.orValue(0)'
+  # Rendered to JSON here: the manifest template language has no toJson.
+  - name: nodeLabelsJson
+    source:
+      expression: 'toJson(nodepool.?spec.?labels.orValue({}))'
+  - name: taintsJson
+    source:
+      expression: 'toJson(nodepool.?spec.?taints.orValue([]))'
+
+  - name: clusterStatuses
+    source:
+      api_call:
+        method: GET
+        url: "/clusters/{{ .clusterId }}/statuses"
+        timeout: 10s
+        retry_attempts: 3
+        retry_backoff: exponential
+  - name: hostedClusterApplied
+    source:
+      expression: |
+        clusterStatuses.?items.orValue([]).exists(i, i.adapter == "hc-hypershift"
+          && i.conditions.exists(c, c.type == "Applied" && c.status == "True"))
+
+preconditions:
+  - name: hostedClusterExists
+    expression: "is_deleting || hostedClusterApplied"
+
+resources:
+  - name: nodePool
+    manifest:
+      ref: nodepool.yaml
+    discovery:
+      namespace: "{{ .clustersNamespace }}"
+      by_name: "{{ .hsNodePoolName }}"
+    lifecycle:
+      delete:
+        propagationPolicy: Background
+        when:
+          expression: is_deleting
+
+post:
+  payloads:
+    - name: statusPayload
+      build:
+        adapter: "{{ .adapter.name }}"
+        conditions:
+          - type: Applied
+            status:
+              expression: 'resource_states.?nodePool.orValue("") == "present" ? "True" : "False"'
+            reason:
+              expression: |
+                !hostedClusterApplied && !is_deleting ? "WaitingForHostedCluster"
+                  : resource_states.?nodePool.orValue("") == "present" ? "NodePoolApplied" : "NodePoolPending"
+            message:
+              expression: '"NodePool " + clustersNamespace + "/" + hsNodePoolName + " is " + resource_states.?nodePool.orValue("absent")'
+          # Available means a launcher can start instances: the user-data for
+          # the current config exists. On None nothing reports node health here.
+          - type: Available
+            status:
+              expression: |
+                resources.?nodePool.?metadata.?annotations[?"hypershift.openshift.io/nodePoolCurrentConfigVersion"].hasValue()
+                  && resources.nodePool.status.conditions.exists(c, c.type == "ValidGeneratedPayload" && c.status == "True")
+                ? "True" : "False"
+            reason:
+              expression: |
+                resources.?nodePool.?metadata.?annotations[?"hypershift.openshift.io/nodePoolCurrentConfigVersion"].hasValue()
+                  ? "UserDataReady" : "UserDataPending"
+            message:
+              expression: '"ignition user-data for the current NodePool config is " + (resources.?nodePool.?metadata.?annotations[?"hypershift.openshift.io/nodePoolCurrentConfigVersion"].hasValue() ? "ready" : "not ready")'
+          - type: Health
+            status:
+              expression: |
+                adapter.?executionStatus.orValue("") == "success" && !adapter.?resourcesSkipped.orValue(false) ? "True" : "False"
+            reason:
+              expression: |
+                adapter.?executionStatus.orValue("") != "success"
+                  ? "ExecutionFailed:" + adapter.?executionError.?phase.orValue("unknown")
+                  : adapter.?resourcesSkipped.orValue(false) ? "ResourcesSkipped" : "Healthy"
+            message:
+              expression: 'adapter.?executionError.?message.orValue(adapter.?errorMessage.orValue("ok"))'
+          - type: Finalized
+            status:
+              expression: |
+                is_deleting
+                  && adapter.?executionStatus.orValue("") == "success"
+                  && !adapter.?resourcesSkipped.orValue(false)
+                  && resource_states.?nodePool.orValue("") == "confirmed_deleted"
+                ? "True" : "False"
+            reason:
+              expression: |
+                !is_deleting ? "NotDeleting"
+                  : resource_states.?nodePool.orValue("") == "confirmed_deleted" ? "CleanupConfirmed" : "CleanupInProgress"
+            message:
+              expression: '!is_deleting ? "Resource not marked for deletion" : "NodePool is " + resource_states.?nodePool.orValue("absent")'
+        data:
+          nodepool:
+            expression: 'clustersNamespace + "/" + hsNodePoolName'
+          config_version:
+            expression: 'resources.?nodePool.?metadata.?annotations[?"hypershift.openshift.io/nodePoolCurrentConfigVersion"].orValue("")'
+          # Where the launcher reads the ignition stub. The secret holds a
+          # bearer token; only its location is reported.
+          user_data_secret_namespace:
+            expression: 'clustersNamespace + "-" + clusterName'
+          user_data_secret_name:
+            expression: |
+              resources.?nodePool.?metadata.?annotations[?"hypershift.openshift.io/nodePoolCurrentConfigVersion"].hasValue()
+                ? "user-data-" + hsNodePoolName + "-" + resources.nodePool.metadata.annotations["hypershift.openshift.io/nodePoolCurrentConfigVersion"]
+                : ""
+          version:
+            expression: 'resources.?nodePool.?status.?version.orValue("")'
+        observed_generation:
+          expression: generation
+        observed_time: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
+
+  post_actions:
+    - name: reportNodepoolStatus
+      api_call:
+        method: PUT
+        url: "/clusters/{{ .clusterId }}/nodepools/{{ .nodepoolId }}/statuses"
+        headers:
+          - name: Content-Type
+            value: application/json
+        body: "{{ .statusPayload }}"

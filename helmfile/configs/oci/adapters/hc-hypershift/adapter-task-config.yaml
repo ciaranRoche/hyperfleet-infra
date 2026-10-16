@@ -1,0 +1,166 @@
+schema_version: "2.0"
+
+# HyperFleet cluster -> HyperShift HostedCluster (platform None) on the
+# management cluster. Cluster spec fields (all optional, defaults in brackets):
+#   version             OpenShift release, x.y.z               [4.22.18]
+#   availability        SingleReplica | HighlyAvailable        [SingleReplica]
+#   base_domain         parent DNS domain                       [env BASE_DOMAIN]
+#   cluster_network_cidr                                        [10.132.0.0/14]
+#   service_network_cidr                                        [172.31.0.0/16]
+#   region, compartment_id, vcn_id: where the customer side lives; carried for
+#   the provisioner and reported back, not used by HyperShift on None.
+
+params:
+  - name: resourceId
+    source: event.id
+    type: string
+    required: true
+  - name: clustersNamespace
+    source: env.CLUSTERS_NAMESPACE
+    type: string
+    required: true
+  - name: pullSecretName
+    source: env.PULL_SECRET_NAME
+    type: string
+    required: true
+  - name: defaultBaseDomain
+    source: env.BASE_DOMAIN
+    type: string
+    required: true
+  - name: etcdStorageClass
+    source: env.ETCD_STORAGE_CLASS
+    type: string
+    required: true
+
+  - name: cluster
+    source:
+      api_call:
+        method: GET
+        url: "/clusters/{{ .resourceId }}"
+        timeout: 10s
+        retry_attempts: 3
+        retry_backoff: exponential
+
+  - name: clusterName
+    source: cluster.name
+  - name: generation
+    source: cluster.generation
+    type: int
+  - name: is_deleting
+    source:
+      expression: "cluster.?deleted_time.hasValue()"
+
+  - name: version
+    source:
+      expression: 'cluster.?spec.?version.orValue("4.22.18")'
+  - name: availability
+    source:
+      expression: 'cluster.?spec.?availability.orValue("SingleReplica")'
+  - name: baseDomain
+    source:
+      expression: 'cluster.?spec.?base_domain.orValue(defaultBaseDomain)'
+  - name: clusterNetworkCidr
+    source:
+      expression: 'cluster.?spec.?cluster_network_cidr.orValue("10.132.0.0/14")'
+  - name: serviceNetworkCidr
+    source:
+      expression: 'cluster.?spec.?service_network_cidr.orValue("172.31.0.0/16")'
+
+resources:
+  - name: hostedCluster
+    manifest:
+      ref: hostedcluster.yaml
+    discovery:
+      namespace: "{{ .clustersNamespace }}"
+      by_name: "{{ .clusterName }}"
+    lifecycle:
+      delete:
+        propagationPolicy: Background
+        when:
+          expression: is_deleting
+
+post:
+  payloads:
+    - name: statusPayload
+      build:
+        adapter: "{{ .adapter.name }}"
+        conditions:
+          - type: Applied
+            status:
+              expression: 'resource_states.?hostedCluster.orValue("") == "present" ? "True" : "False"'
+            reason:
+              expression: 'resource_states.?hostedCluster.orValue("") == "present" ? "HostedClusterApplied" : "HostedClusterPending"'
+            message:
+              expression: '"HostedCluster " + clustersNamespace + "/" + clusterName + " is " + resource_states.?hostedCluster.orValue("absent")'
+          - type: Available
+            status:
+              expression: |
+                resources.?hostedCluster.?status.?conditions.orValue([]).exists(c, c.type == "Available" && c.status == "True")
+                  ? "True" : "False"
+            reason:
+              expression: |
+                resources.?hostedCluster.?status.?conditions.orValue([]).filter(c, c.type == "Available").size() > 0
+                  ? resources.hostedCluster.status.conditions.filter(c, c.type == "Available")[0].reason
+                  : "HostedClusterNotReporting"
+            message:
+              expression: |
+                resources.?hostedCluster.?status.?conditions.orValue([]).filter(c, c.type == "Available").size() > 0
+                  ? resources.hostedCluster.status.conditions.filter(c, c.type == "Available")[0].message
+                  : "HostedCluster has no Available condition yet"
+          - type: Health
+            status:
+              expression: |
+                adapter.?executionStatus.orValue("") == "success" && !adapter.?resourcesSkipped.orValue(false) ? "True" : "False"
+            reason:
+              expression: |
+                adapter.?executionStatus.orValue("") != "success"
+                  ? "ExecutionFailed:" + adapter.?executionError.?phase.orValue("unknown")
+                  : adapter.?resourcesSkipped.orValue(false) ? "ResourcesSkipped" : "Healthy"
+            message:
+              expression: 'adapter.?executionError.?message.orValue(adapter.?errorMessage.orValue("ok"))'
+          - type: Finalized
+            status:
+              expression: |
+                is_deleting
+                  && adapter.?executionStatus.orValue("") == "success"
+                  && !adapter.?resourcesSkipped.orValue(false)
+                  && resource_states.?hostedCluster.orValue("") == "confirmed_deleted"
+                ? "True" : "False"
+            reason:
+              expression: |
+                !is_deleting ? "NotDeleting"
+                  : resource_states.?hostedCluster.orValue("") == "confirmed_deleted" ? "CleanupConfirmed" : "CleanupInProgress"
+            message:
+              expression: '!is_deleting ? "Resource not marked for deletion" : "HostedCluster is " + resource_states.?hostedCluster.orValue("absent")'
+        # Endpoints and references only: no credentials leave the cluster.
+        data:
+          hosted_cluster:
+            expression: 'clustersNamespace + "/" + clusterName'
+          control_plane_namespace:
+            expression: 'clustersNamespace + "-" + clusterName'
+          api_url:
+            expression: |
+              resources.?hostedCluster.?status.?controlPlaneEndpoint.?host.hasValue()
+                ? "https://" + resources.hostedCluster.status.controlPlaneEndpoint.host + ":" + string(resources.hostedCluster.status.controlPlaneEndpoint.port)
+                : ""
+          ignition_endpoint:
+            expression: 'resources.?hostedCluster.?status.?ignitionEndpoint.orValue("")'
+          console_url:
+            expression: '"https://console-openshift-console.apps." + clusterName + "." + baseDomain'
+          version:
+            expression: 'resources.?hostedCluster.?status.?version.?desired.?version.orValue(version)'
+          kubeconfig_secret:
+            expression: 'resources.?hostedCluster.?status.?kubeconfig.?name.orValue("")'
+        observed_generation:
+          expression: generation
+        observed_time: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
+
+  post_actions:
+    - name: reportClusterStatus
+      api_call:
+        method: PUT
+        url: "/clusters/{{ .resourceId }}/statuses"
+        headers:
+          - name: Content-Type
+            value: application/json
+        body: "{{ .statusPayload }}"

@@ -1,0 +1,34 @@
+# HyperShift NodePool for a HyperFleet node pool, platform None. On None the
+# NodePool only produces the ignition token and the user-data secret; the
+# launch fields of the HyperFleet spec (shape, subnet, NSGs, count, boot
+# volume) are for whoever launches instances. nodeLabels and taints are set
+# for the record, but None never applies them to nodes.
+apiVersion: hypershift.openshift.io/v1beta1
+kind: NodePool
+metadata:
+  name: "{{ .hsNodePoolName }}"
+  namespace: "{{ .clustersNamespace }}"
+  labels:
+    hyperfleet.io/cluster-id: "{{ .clusterId }}"
+    hyperfleet.io/nodepool-id: "{{ .nodepoolId }}"
+    hyperfleet.io/managed-by: "{{ .adapter.name }}"
+  annotations:
+    hyperfleet.io/generation: "{{ .generation }}"
+spec:
+  clusterName: "{{ .clusterName }}"
+  arch: amd64
+  replicas: {{ .count }}
+  release:
+    image: "quay.io/openshift-release-dev/ocp-release:{{ .version }}-x86_64"
+  platform:
+    type: None
+  management:
+    upgradeType: Replace
+    autoRepair: false
+  # Kubelet identity (provider ID, zone, region, instance type) and OCI
+  # device paths; both ConfigMaps live in the HostedCluster namespace.
+  config:
+    - name: oci-kubelet-providerid
+    - name: oci-consistent-device-path
+  nodeLabels: {{ .nodeLabelsJson }}
+  taints: {{ .taintsJson }}

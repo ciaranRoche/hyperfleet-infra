@@ -73,9 +73,15 @@ variable "pod_nsg_ids" {
 }
 
 variable "max_pods_per_node" {
-  description = "Pods per node with the VCN-native CNI. Bounded by the shape's VNIC count; 31 fits a 4 OCPU E5."
+  description = "Pods per node with the VCN-native CNI. Bounded by the shape's VNICs: 31 per secondary VNIC, so (VNICs - 1) x 31; an E5.Flex has one VNIC per OCPU, so 93 at 4 OCPUs."
   type        = number
-  default     = 31
+  default     = 93
+}
+
+variable "node_cycling" {
+  description = "Replace nodes one at a time (surge 1, none unavailable) when the node pool's node configuration changes."
+  type        = bool
+  default     = true
 }
 
 variable "services_cidr" {

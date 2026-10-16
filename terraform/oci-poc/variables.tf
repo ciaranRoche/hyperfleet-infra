@@ -154,3 +154,9 @@ variable "customer_worker_policy_verbs" {
     "manage instance-family",
   ]
 }
+
+variable "dns_compartment_id" {
+  description = "Compartment of the platform DNS zone. When set, OKE nodes may manage its records (for external-dns). The zone itself is never managed here."
+  type        = string
+  default     = null
+}

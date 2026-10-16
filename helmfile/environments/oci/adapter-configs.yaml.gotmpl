@@ -1,0 +1,80 @@
+{{ $namespace := requiredEnv "NAMESPACE" }}
+{{ $hypershiftRbac := list (dict "apiGroups" (list "hypershift.openshift.io") "resources" (list "hostedclusters" "nodepools") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete")) }}
+adapters:
+  # HyperFleet cluster -> HyperShift HostedCluster on this management cluster.
+  - name: hc-hypershift
+    resourceType: clusters
+    values:
+      - adapterTaskConfig:
+          create: true
+        adapterConfig:
+          create: true
+          log:
+            level: info
+        rbac:
+          resources: []
+          rules: {{ toJson $hypershiftRbac }}
+        # Replaces base-adapter's env list (Helm does not merge lists).
+        env:
+          - name: NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: CLUSTERS_NAMESPACE
+            value: {{ env "CLUSTERS_NAMESPACE" | default "clusters" }}
+          - name: PULL_SECRET_NAME
+            value: {{ env "HOSTED_CLUSTER_PULL_SECRET" | default "platform-pull-secret" }}
+          - name: BASE_DOMAIN
+            value: {{ env "HOSTED_CLUSTER_BASE_DOMAIN" | default "hcp.oci.hypershell.app" }}
+          - name: ETCD_STORAGE_CLASS
+            value: {{ env "ETCD_STORAGE_CLASS" | default "oci-bv" }}
+        broker:
+          create: true
+          rabbitmq:
+            url: "amqp://guest:guest@rabbitmq:5672"
+            queue: {{ $namespace }}-clusters-hc-hypershift
+            exchange: {{ $namespace }}-clusters
+            routingKey: "#"
+    setFiles:
+      - name: adapterConfig.yaml
+        file: configs/oci/adapters/hc-hypershift/adapter-config.yaml
+      - name: adapterTaskConfig.external.task-config
+        file: configs/oci/adapters/hc-hypershift/adapter-task-config.yaml
+      - name: adapterTaskConfig.external.hostedcluster
+        file: configs/oci/adapters/hc-hypershift/hostedcluster.yaml
+
+  # HyperFleet node pool -> HyperShift NodePool (user-data for the launcher).
+  - name: np-hypershift
+    resourceType: nodepools
+    values:
+      - adapterTaskConfig:
+          create: true
+        adapterConfig:
+          create: true
+          log:
+            level: info
+        rbac:
+          resources: []
+          rules: {{ toJson $hypershiftRbac }}
+        # Replaces base-adapter's env list (Helm does not merge lists).
+        env:
+          - name: NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: CLUSTERS_NAMESPACE
+            value: {{ env "CLUSTERS_NAMESPACE" | default "clusters" }}
+        broker:
+          create: true
+          rabbitmq:
+            url: "amqp://guest:guest@rabbitmq:5672"
+            queue: {{ $namespace }}-nodepools-np-hypershift
+            exchange: {{ $namespace }}-nodepools
+            routingKey: "#"
+    setFiles:
+      - name: adapterConfig.yaml
+        file: configs/oci/adapters/np-hypershift/adapter-config.yaml
+      - name: adapterTaskConfig.external.task-config
+        file: configs/oci/adapters/np-hypershift/adapter-task-config.yaml
+      - name: adapterTaskConfig.external.nodepool
+        file: configs/oci/adapters/np-hypershift/nodepool.yaml

@@ -26,3 +26,19 @@ resource "oci_identity_policy" "customer_workers" {
   ]
   freeform_tags = local.tags
 }
+
+# external-dns on the management cluster publishes each hosted cluster's
+# control plane hostnames (from its router Service) into the platform DNS
+# zone. It authenticates as the OKE nodes' instance principals. Records only:
+# `use dns` cannot create or delete zones.
+resource "oci_identity_policy" "external_dns" {
+  count = var.dns_compartment_id == null ? 0 : 1
+
+  compartment_id = var.dns_compartment_id
+  name           = "${var.name_prefix}-external-dns"
+  description    = "Lets OKE nodes of the OCI POC management cluster manage records in the platform DNS zone."
+  statements = [
+    "allow any-user to use dns in compartment id ${var.dns_compartment_id} where ALL {request.principal.type = 'instance', request.principal.compartment.id = '${local.service_compartment_id}'}",
+  ]
+  freeform_tags = local.tags
+}

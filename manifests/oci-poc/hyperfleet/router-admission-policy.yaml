@@ -1,0 +1,57 @@
+# Every hosted cluster's per-cluster router Service (namespace clusters-<name>,
+# Service "router") becomes an internal OCI load balancer in the management
+# cluster's private load balancer subnet, with its frontend NSG owned by the
+# cloud controller manager (architecture ADR 0024), and carries the four
+# control plane hostnames for external-dns. HyperShift's control-plane-operator
+# leaves these annotations alone.
+# BASE_DOMAIN below must match the HostedClusters' dns.baseDomain.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: hosted-cluster-router-oci
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["services"]
+    namespaceSelector:
+      matchLabels:
+        hypershift.openshift.io/hosted-control-plane: "true"
+  matchConditions:
+    - name: router-load-balancer
+      expression: 'object.metadata.name == "router" && object.spec.type == "LoadBalancer"'
+  variables:
+    - name: cluster
+      # clusters-<name> -> <name>; the HostedCluster namespace is "clusters".
+      expression: 'object.metadata.namespace.substring(9)'
+    - name: domain
+      expression: '"BASE_DOMAIN"'
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >
+          Object{
+            metadata: Object.metadata{
+              annotations: {
+                "oci.oraclecloud.com/security-rule-management-mode": "NSG",
+                "oci.oraclecloud.com/load-balancer-type": "lb",
+                "service.beta.kubernetes.io/oci-load-balancer-internal": "true",
+                "service.beta.kubernetes.io/oci-load-balancer-shape": "flexible",
+                "service.beta.kubernetes.io/oci-load-balancer-shape-flex-min": "10",
+                "service.beta.kubernetes.io/oci-load-balancer-shape-flex-max": "10",
+                "external-dns.alpha.kubernetes.io/hostname":
+                  ["api", "oauth", "konnectivity", "ignition"].map(h, h + "." + variables.cluster + "." + variables.domain).join(",")
+              }
+            }
+          }
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: hosted-cluster-router-oci
+spec:
+  policyName: hosted-cluster-router-oci
