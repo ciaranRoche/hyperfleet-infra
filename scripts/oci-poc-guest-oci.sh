@@ -26,6 +26,9 @@ set -euo pipefail
 # Optional:
 #   CCM_VERSION          oracle/oci-cloud-controller-manager release (default: v1.35.1)
 #   OUTDIR               (default: ~/.cache/oci-poc-guest-oci)
+#   CLUSTER_TAG          value of the hyperfleet-cluster freeform tag the CCM and CSI
+#                        put on every load balancer, NSG and volume they create, so
+#                        they can be found and removed after the cluster is gone
 
 CCM_VERSION="${CCM_VERSION:-v1.35.1}"
 COMPARTMENT_ID="${COMPARTMENT_ID:-}"
@@ -33,6 +36,7 @@ VCN_ID="${VCN_ID:-}"
 LB_SUBNET_ID="${LB_SUBNET_ID:-}"
 GUEST_KUBECONFIG="${GUEST_KUBECONFIG:-}"
 OUTDIR="${OUTDIR:-${HOME}/.cache/oci-poc-guest-oci}"
+CLUSTER_TAG="${CLUSTER_TAG:-}"
 ACTION="${1:-}"
 
 MANIFESTS="$(cd "$(dirname "$0")/.." && pwd)/manifests/oci-poc/guest-oci"
@@ -40,7 +44,7 @@ CCM_NS="oci-cloud-controller-manager"
 CSI_NS="oci-csi"
 RELEASE_URL="https://github.com/oracle/oci-cloud-controller-manager/releases/download/${CCM_VERSION}"
 
-usage() { sed -n '3,29p' "$0"; }
+usage() { sed -n '3,32p' "$0"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
@@ -82,6 +86,14 @@ rateLimiter:
   rateLimitQPSWrite: 20.0
   rateLimitBucketWrite: 5
 EOF
+    if [[ -n "${CLUSTER_TAG}" ]]; then
+        cat <<EOF
+tags:
+  common:
+    freeform:
+      hyperfleet-cluster: ${CLUSTER_TAG}
+EOF
+    fi
 }
 
 retarget() {
