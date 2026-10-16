@@ -1,0 +1,14 @@
+# Annotations that make the per-cluster router Service an internal OCI load
+# balancer in the management cluster's private load balancer subnet, with its
+# frontend NSG owned by the cloud controller manager (architecture ADR 0024).
+# The control-plane-operator sets load balancer annotations for AWS, GCP and
+# Azure only and leaves these alone across reconciles.
+# Apply with: kubectl -n clusters-<name> patch svc router --type merge --patch-file router-internal-lb.yaml
+metadata:
+  annotations:
+    oci.oraclecloud.com/security-rule-management-mode: "NSG"
+    oci.oraclecloud.com/load-balancer-type: "lb"
+    service.beta.kubernetes.io/oci-load-balancer-internal: "true"
+    service.beta.kubernetes.io/oci-load-balancer-shape: "flexible"
+    service.beta.kubernetes.io/oci-load-balancer-shape-flex-min: "10"
+    service.beta.kubernetes.io/oci-load-balancer-shape-flex-max: "10"

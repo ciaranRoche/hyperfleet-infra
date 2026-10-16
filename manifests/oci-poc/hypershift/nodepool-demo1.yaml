@@ -1,0 +1,20 @@
+# platform None: replicas, autoscaling, autoRepair, nodeLabels and taints have
+# no effect; the NodePool only produces the token and user-data secrets.
+apiVersion: hypershift.openshift.io/v1beta1
+kind: NodePool
+metadata:
+  name: demo1-workers
+  namespace: clusters
+spec:
+  arch: amd64
+  clusterName: demo1
+  management:
+    autoRepair: false
+    upgradeType: InPlace
+  nodeDrainTimeout: 0s
+  nodeVolumeDetachTimeout: 0s
+  platform:
+    type: None
+  release:
+    image: quay.io/openshift-release-dev/ocp-release:4.22.18-x86_64
+  replicas: 0
