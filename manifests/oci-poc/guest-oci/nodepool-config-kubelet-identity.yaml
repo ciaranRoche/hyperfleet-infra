@@ -1,0 +1,23 @@
+# NodePool spec.config entry. Sets the kubelet provider ID and the zone, region
+# and instance-type labels from OCI instance metadata. On platform None the
+# kubelet runs with no cloud provider, so nothing else sets them, and the
+# block volume CSI driver cannot pick an availability domain without the zone.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oci-kubelet-providerid
+  namespace: clusters
+data:
+  config: "apiVersion: machineconfiguration.openshift.io/v1\nkind: MachineConfig\n\
+    metadata:\n  name: 50-worker-oci-kubelet-providerid\n  labels:\n    machineconfiguration.openshift.io/role:\
+    \ worker\nspec:\n  config:\n    ignition:\n      version: 3.4.0\n    storage:\n\
+    \      files:\n      - path: /usr/local/bin/oci-kubelet-providerid\n        mode:\
+    \ 493\n        overwrite: true\n        contents:\n          source: data:text/plain;charset=utf-8;base64,IyEvYmluL2Jhc2gKIyBLdWJlbGV0IGlkZW50aXR5IGZyb20gT0NJIGluc3RhbmNlIG1ldGFkYXRhLCBmb3IgdGhlIGd1ZXN0J3MgY2xvdWQgY29udHJvbGxlcgojIG1hbmFnZXIgYW5kIGJsb2NrIHZvbHVtZSBDU0kgZHJpdmVyLiBPbiBwbGF0Zm9ybSBOb25lIHRoZSBrdWJlbGV0IHJ1bnMgd2l0aAojIG5vIGNsb3VkIHByb3ZpZGVyLCBzbyBub3RoaW5nIGVsc2Ugc2V0cyB0aGUgcHJvdmlkZXIgSUQgb3IgdG9wb2xvZ3kgbGFiZWxzLgpzZXQgLWUgLW8gcGlwZWZhaWwKTk9ERUNPTkY9L2V0Yy9zeXN0ZW1kL3N5c3RlbS9rdWJlbGV0LnNlcnZpY2UuZC8yMC1vY2ktcHJvdmlkZXJpZC5jb25mCmlmIFsgLWUgIiR7Tk9ERUNPTkZ9IiBdOyB0aGVuCiAgICBlY2hvICJOb3QgcmVwbGFjaW5nIGV4aXN0aW5nICR7Tk9ERUNPTkZ9IgogICAgZXhpdCAwCmZpCm1kKCkgeyBjdXJsIC1IICJBdXRob3JpemF0aW9uOiBCZWFyZXIgT3JhY2xlIiAtc2ZMIC0tcmV0cnkgMTAgLS1yZXRyeS1jb25ucmVmdXNlZCAiaHR0cDovLzE2OS4yNTQuMTY5LjI1NC9vcGMvdjIvaW5zdGFuY2UvJDEiOyB9CklOU1RBTkNFX0lEPSQobWQgaWQpCkFEPSQobWQgYXZhaWxhYmlsaXR5RG9tYWluKQpSRUdJT049JChtZCBjYW5vbmljYWxSZWdpb25OYW1lKQpTSEFQRT0kKG1kIHNoYXBlKQpbIC1uICIke0lOU1RBTkNFX0lEfSIgXSAmJiBbIC1uICIke0FEfSIgXSB8fCB7IGVjaG8gImluc3RhbmNlIG1ldGFkYXRhIGluY29tcGxldGUiOyBleGl0IDE7IH0KIyBab25lIGluIHRoZSBmb3JtIE9LRSB1c2VzOiB0aGUgYXZhaWxhYmlsaXR5IGRvbWFpbiB3aXRob3V0IHRoZSB0ZW5hbmN5IHByZWZpeC4KWk9ORT0iJHtBRCMqOn0iCmNhdCA+ICIke05PREVDT05GfSIgPDxFT1QKW1NlcnZpY2VdCkVudmlyb25tZW50PSJLVUJFTEVUX1BST1ZJREVSSUQ9b2NpOi8vJHtJTlNUQU5DRV9JRH0iCkVudmlyb25tZW50PSJDVVNUT01fS1VCRUxFVF9MQUJFTFM9dG9wb2xvZ3kua3ViZXJuZXRlcy5pby96b25lPSR7Wk9ORX0sdG9wb2xvZ3kua3ViZXJuZXRlcy5pby9yZWdpb249JHtSRUdJT059LG5vZGUua3ViZXJuZXRlcy5pby9pbnN0YW5jZS10eXBlPSR7U0hBUEV9IgpFT1QKc3lzdGVtY3RsIGRhZW1vbi1yZWxvYWQK\n\
+    \    systemd:\n      units:\n      - name: oci-kubelet-providerid.service\n  \
+    \      enabled: true\n        contents: '[Unit]\n\n          Description=Set the\
+    \ kubelet provider ID from OCI instance metadata\n\n          After=network-online.target\n\
+    \n          Wants=network-online.target\n\n          Before=kubelet.service kubelet-dependencies.target\n\
+    \n\n          [Service]\n\n          Type=oneshot\n\n          RemainAfterExit=yes\n\
+    \n          ExecStart=/usr/local/bin/oci-kubelet-providerid\n\n\n          [Install]\n\
+    \n          WantedBy=kubelet-dependencies.target multi-user.target\n\n       \
+    \   '\n"

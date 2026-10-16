@@ -108,4 +108,12 @@ resource "oci_containerengine_node_pool" "this" {
       max_pods_per_node = var.max_pods_per_node
     }
   }
+
+  # The newest image for the version is chosen when the pool is created. OKE
+  # publishes new images for the same Kubernetes version every few weeks;
+  # following them would rewrite the pool definition on every plan. Roll nodes
+  # deliberately (set node_image_id, or replace the pool) instead.
+  lifecycle {
+    ignore_changes = [node_source_details[0].image_id]
+  }
 }

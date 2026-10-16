@@ -137,3 +137,20 @@ variable "node_boot_volume_gbs" {
   type        = number
   default     = 100
 }
+
+variable "customer_worker_policy_verbs" {
+  description = <<-EOT
+    Verb and resource pairs granted to each customer's worker dynamic group in
+    its own compartment. The guest cloud controller manager needs load
+    balancers, network security groups and instance and VNIC reads; the block
+    volume CSI driver needs volumes and attachments.
+  EOT
+  type        = list(string)
+  default = [
+    "manage load-balancers",
+    "manage network-security-groups",
+    "manage virtual-network-family",
+    "manage volume-family",
+    "manage instance-family",
+  ]
+}

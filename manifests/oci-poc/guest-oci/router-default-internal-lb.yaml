@@ -1,0 +1,14 @@
+# Annotations that make the guest's default ingress Service an internal OCI load
+# balancer in the customer's private load balancer subnet, with its
+# frontend NSG owned by the cloud controller manager (architecture ADR 0024).
+# The ingress operator on platform None knows no OCI annotations and leaves
+# these alone; keep the IngressController scope External or it reports Progressing.
+# Apply in the guest with: oc -n openshift-ingress patch svc router-default --type merge --patch-file router-default-internal-lb.yaml
+metadata:
+  annotations:
+    oci.oraclecloud.com/security-rule-management-mode: "NSG"
+    oci.oraclecloud.com/load-balancer-type: "lb"
+    service.beta.kubernetes.io/oci-load-balancer-internal: "true"
+    service.beta.kubernetes.io/oci-load-balancer-shape: "flexible"
+    service.beta.kubernetes.io/oci-load-balancer-shape-flex-min: "10"
+    service.beta.kubernetes.io/oci-load-balancer-shape-flex-max: "10"

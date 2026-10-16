@@ -1,0 +1,12 @@
+# Merge patch for the hosted cluster's network.operator/cluster. OVN-Kubernetes
+# defaults its internal masquerade subnet to 169.254.0.0/17, which covers OCI's
+# iSCSI targets (169.254.2.x); nodes then send iSCSI traffic from the masquerade
+# address and block volume attachments time out. HostedCluster does not expose
+# this field, so it is set in the guest, which HyperShift leaves alone.
+# Apply with: oc patch network.operator cluster --type merge --patch-file guest-network-masquerade.yaml
+spec:
+  defaultNetwork:
+    ovnKubernetesConfig:
+      gatewayConfig:
+        ipv4:
+          internalMasqueradeSubnet: 169.254.64.0/18

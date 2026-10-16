@@ -3,6 +3,9 @@
 # through the per-cluster router, PodSecurity override for a non-OpenShift
 # management cluster, SingleReplica. Secrets referenced here are created by
 # scripts/oci-poc-hypershift.sh from local files and never committed.
+# The guest's default ingress publishes as a load balancer from creation (the
+# HCCO only applies this when it first creates the IngressController); the
+# Service is made internal with OCI annotations by oci-poc-guest-oci.sh.
 apiVersion: hypershift.openshift.io/v1beta1
 kind: HostedCluster
 metadata:
@@ -68,3 +71,10 @@ spec:
         hostname: ignition.demo1.hcp.oci.hypershell.app
   sshKey:
     name: demo1-ssh-key
+  operatorConfiguration:
+    ingressOperator:
+      endpointPublishingStrategy:
+        type: LoadBalancerService
+        loadBalancer:
+          scope: External
+          dnsManagementPolicy: Unmanaged

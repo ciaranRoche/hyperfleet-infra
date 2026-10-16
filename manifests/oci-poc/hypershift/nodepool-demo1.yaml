@@ -1,5 +1,6 @@
 # platform None: replicas, autoscaling, autoRepair, nodeLabels and taints have
 # no effect; the NodePool only produces the token and user-data secrets.
+# config: the two MachineConfigs in ../guest-oci/nodepool-config-*.yaml.
 apiVersion: hypershift.openshift.io/v1beta1
 kind: NodePool
 metadata:
@@ -18,3 +19,6 @@ spec:
   release:
     image: quay.io/openshift-release-dev/ocp-release:4.22.18-x86_64
   replicas: 0
+  config:
+  - name: oci-kubelet-providerid
+  - name: oci-consistent-device-path

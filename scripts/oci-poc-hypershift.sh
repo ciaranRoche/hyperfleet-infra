@@ -124,6 +124,8 @@ do_cluster_up() {
         kubectl -n "${NAMESPACE}" create secret generic "${CLUSTER_NAME}-etcd-encryption-key" \
             --from-literal=key="$(head -c 32 /dev/urandom | base64)" >/dev/null
     fi
+    kubectl apply -f "${MANIFESTS}/../guest-oci/nodepool-config-kubelet-identity.yaml" \
+        -f "${MANIFESTS}/../guest-oci/nodepool-config-device-path.yaml"
     kubectl apply -f "${MANIFESTS}/hostedcluster-${CLUSTER_NAME}.yaml" -f "${MANIFESTS}/nodepool-${CLUSTER_NAME}.yaml"
     wait_for "router Service" 900 kubectl -n "${CP_NS}" get svc router
     do_router_lb

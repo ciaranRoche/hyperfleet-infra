@@ -1,0 +1,12 @@
+# The image registry operator creates its claim ReadWriteMany, which a block
+# volume cannot satisfy. Pre-create a ReadWriteOnce claim and point the
+# registry at it with one replica and the Recreate rollout strategy.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: image-registry-storage-rwo
+  namespace: openshift-image-registry
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: oci-bv
+  resources: {requests: {storage: 100Gi}}
