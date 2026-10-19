@@ -1,5 +1,14 @@
 {{ $namespace := requiredEnv "NAMESPACE" }}
 {{ $hypershiftRbac := list (dict "apiGroups" (list "hypershift.openshift.io") "resources" (list "hostedclusters" "nodepools") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete")) }}
+# Status reporters outside Helmfile that the API waits on. oci-provisioner is
+# the worker launcher (tools/oci-poc-provisioner): a node pool is reconciled
+# only with Ready nodes, and nothing is hard-deleted before it has removed the
+# instances and the guest's cloud resources.
+externalAdapters:
+  - name: oci-provisioner
+    resourceType: clusters
+  - name: oci-provisioner
+    resourceType: nodepools
 adapters:
   # HyperFleet cluster -> HyperShift HostedCluster on this management cluster.
   - name: hc-hypershift

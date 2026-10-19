@@ -86,10 +86,15 @@ rateLimiter:
   rateLimitQPSWrite: 20.0
   rateLimitBucketWrite: 5
 EOF
+    # Per-kind sections: the CCM and CSI only merge tags.common when OKE's
+    # resource tracking feature is on, which it never is outside OKE.
     if [[ -n "${CLUSTER_TAG}" ]]; then
         cat <<EOF
 tags:
-  common:
+  loadBalancer:
+    freeform:
+      hyperfleet-cluster: ${CLUSTER_TAG}
+  blockVolume:
     freeform:
       hyperfleet-cluster: ${CLUSTER_TAG}
 EOF

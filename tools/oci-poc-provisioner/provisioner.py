@@ -13,6 +13,7 @@ Standard library only; shells out to `oci`, `kubectl` and `openssl`.
 
 import argparse
 import base64
+import calendar
 import json
 import os
 import random
@@ -29,6 +30,10 @@ ADAPTER = "oci-provisioner"
 TAG_NODEPOOL = "hyperfleet-nodepool-id"
 TAG_CLUSTER = "hyperfleet-cluster"
 TAG_CONFIG = "hyperfleet-config-version"
+GONE = ("DELETED", "DELETING", "TERMINATED", "TERMINATING")
+# How long a cluster delete keeps its nodes while the guest removes its load
+# balancers and volumes; after that the reaper takes over.
+GUEST_CLEANUP_GRACE = 600
 BOOTSTRAPPER = "system:serviceaccount:openshift-machine-config-operator:node-bootstrapper"
 
 
@@ -89,6 +94,10 @@ class HyperFleet:
             if item.get("adapter") == adapter:
                 return item
         return None
+
+
+def age_seconds(stamp):
+    return time.time() - calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
 
 
 def condition(obj, ctype):
@@ -260,7 +269,7 @@ class Provisioner:
         oci_json(["compute", "instance", "terminate", "--instance-id", instance["id"], "--preserve-boot-volume", "false", "--force"])
         log(f"terminating {name}: {why}")
 
-    def reconcile_nodepool(self, guest, cluster, np, instances, nodes):
+    def reconcile_nodepool(self, guest, cluster, np, instances, nodes, hold=False):
         path = f"/clusters/{cluster['id']}/nodepools/{np['id']}"
         status = self.api.adapter_data(path, "np-hypershift")
         mine = [i for i in instances if i["freeform-tags"].get(TAG_NODEPOOL) == np["id"]]
@@ -280,14 +289,19 @@ class Provisioner:
                 log(f"{cluster['name']}/{np['name']}: approved {', '.join(approved)}")
             self.apply_labels_taints(guest, np, [i["display-name"] for i in mine if i["display-name"] in nodes])
 
-        # One change per pass: scale up or surge, then retire stale, then scale down.
-        if len(fresh) < desired:
+        # One change per pass. A replace surges by one: launch only while the
+        # pool is at or under its count, retire a stale instance once every
+        # fresh one is Ready. Scale down only touches fresh instances when no
+        # stale ones are left, so it never undoes a surge.
+        if deleting:
+            if mine and not hold:
+                self.remove(guest, sorted(mine, key=lambda i: i["time-created"])[-1], "node pool deleted")
+        elif len(fresh) < desired and len(mine) <= desired:
             self.launch(cluster, np, status, mine)
         elif stale and all(i["display-name"] in ready for i in fresh):
             self.remove(guest, stale[0], f"config {stale[0]['freeform-tags'].get(TAG_CONFIG)} replaced by {current}")
-        elif len(mine) > desired:
-            victim = sorted(mine, key=lambda i: i["time-created"])[-1]
-            self.remove(guest, victim, "scale down" if not deleting else "node pool deleted")
+        elif not stale and len(mine) > desired:
+            self.remove(guest, sorted(mine, key=lambda i: i["time-created"])[-1], "scale down")
 
         self.report(path, np, mine, ready, desired, current)
         return mine
@@ -334,7 +348,7 @@ class Provisioner:
         if not installed:
             if not all(spec.get(k) for k in ("compartment_id", "vcn_id", "lb_subnet_id")):
                 log(f"{cluster['name']}: spec lacks compartment_id, vcn_id or lb_subnet_id; skipping provider package")
-                return
+                return False
             env = dict(os.environ, GUEST_KUBECONFIG=guest.kubeconfig, COMPARTMENT_ID=spec["compartment_id"],
                        VCN_ID=spec["vcn_id"], LB_SUBNET_ID=spec["lb_subnet_id"], CLUSTER_TAG=cluster["name"],
                        OUTDIR=os.path.join(self.cfg.workdir, f"guest-oci-{cluster['name']}"))
@@ -356,16 +370,71 @@ class Provisioner:
                           "--rtype", "A", "--compartment-id", self.cfg.dns_compartment, "--force",
                           "--items", json.dumps([{"domain": domain, "rtype": "A", "rdata": ip, "ttl": 60}])])
                 log(f"{cluster['name']}: {domain} -> {ip}")
+            return True
+        return False
 
     def cleanup_guest(self, guest, cluster):
         """Before a cluster's control plane goes, remove what its guest CCM and CSI
-        created in the customer compartment, while they can still do it."""
-        svcs = json.loads(guest.k(["get", "svc", "-A", "-o", "json"]))["items"]
+        created in the customer compartment, while they can still do it. Returns
+        how many load balancer Services and volumes are still there."""
+        svcs = [s for s in json.loads(guest.k(["get", "svc", "-A", "-o", "json"]))["items"]
+                if s["spec"].get("type") == "LoadBalancer"]
+        pvs = json.loads(guest.k(["get", "pv", "-o", "json"]))["items"]
         for s in svcs:
-            if s["spec"].get("type") == "LoadBalancer":
-                guest.k(["-n", s["metadata"]["namespace"], "delete", "svc", s["metadata"]["name"], "--wait=false"], check=False)
-        guest.k(["delete", "pvc", "-A", "--all", "--wait=false"], check=False)
-        log(f"{cluster['name']}: guest LoadBalancer Services and PVCs deleted")
+            guest.k(["-n", s["metadata"]["namespace"], "delete", "svc", s["metadata"]["name"], "--wait=false"], check=False)
+        if svcs or pvs:
+            guest.k(["delete", "pvc", "-A", "--all", "--wait=false"], check=False)
+            log(f"{cluster['name']}: waiting on {len(svcs)} guest LoadBalancer Services and {len(pvs)} volumes")
+        return len(svcs) + len(pvs)
+
+    def remove_apps_dns(self, cluster):
+        """The *.apps record is the stand-in's own; nothing else removes it."""
+        if not self.cfg.dns_compartment:
+            return
+        domain = f"*.apps.{cluster['name']}.{(cluster.get('spec') or {}).get('base_domain', 'hcp.oci.hypershell.app')}"
+        have = oci_json(["dns", "record", "rrset", "get", "--zone-name-or-id", self.cfg.dns_zone, "--domain", domain,
+                         "--rtype", "A", "--compartment-id", self.cfg.dns_compartment], check=False)
+        if (have.get("data") or {}).get("items"):
+            oci_json(["dns", "record", "rrset", "delete", "--zone-name-or-id", self.cfg.dns_zone, "--domain", domain,
+                      "--rtype", "A", "--compartment-id", self.cfg.dns_compartment, "--force"])
+            log(f"{cluster['name']}: {domain} removed")
+
+    def leftovers(self, name, compartments):
+        """What the cluster still has in OCI: its instances, and the load balancers
+        and volumes its guest tagged. Untagged guest resources are invisible here."""
+        left = []
+        for comp in compartments:
+            left += [f"instance {i['display-name']}" for i in list_instances(comp)
+                     if i["freeform-tags"].get(TAG_CLUSTER) == name]
+            for kind, lister in (("load balancer", ["lb", "load-balancer", "list"]), ("volume", ["bv", "volume", "list"])):
+                left += [f"{kind} {r.get('display-name')}"
+                         for r in oci_json(lister + ["--compartment-id", comp, "--all"], check=False).get("data", [])
+                         if (r.get("freeform-tags") or {}).get(TAG_CLUSTER) == name and r.get("lifecycle-state") not in GONE]
+        return left
+
+    def report_cluster(self, cluster, ready, left):
+        deleting = bool(cluster.get("deleted_time"))
+        finalized = deleting and not left
+        body = {
+            "adapter": ADAPTER,
+            "observed_generation": cluster["generation"],
+            "observed_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "conditions": [
+                {"type": "Applied", "status": "True", "reason": "Observed", "message": "-"},
+                {"type": "Available", "status": "True" if ready else "False",
+                 "reason": "GuestBootstrapped" if ready else "GuestNotBootstrapped",
+                 "message": "provider package, ingress load balancer and *.apps DNS in place" if ready else "waiting for nodes or the guest"},
+                {"type": "Health", "status": "True", "reason": "Healthy", "message": "ok"},
+                {"type": "Finalized", "status": "True" if finalized else "False",
+                 "reason": "CloudResourcesGone" if finalized else ("CloudResourcesRemain" if deleting else "NotDeleting"),
+                 "message": ", ".join(left)[:500] if left else "-"},
+            ],
+            "data": {"leftovers": left},
+        }
+        try:
+            self.api.call("PUT", f"/clusters/{cluster['id']}/statuses", body)
+        except RuntimeError as e:
+            log(f"cluster status report refused: {e}")
 
     def reap(self, live_clusters, live_nodepools, compartments):
         """Remove anything tagged for a cluster or node pool the API no longer has."""
@@ -375,24 +444,37 @@ class Provisioner:
                 if tags.get("hyperfleet-managed-by") == ADAPTER and tags.get(TAG_NODEPOOL) not in live_nodepools:
                     oci_json(["compute", "instance", "terminate", "--instance-id", i["id"], "--preserve-boot-volume", "false", "--force"])
                     log(f"reaped instance {i['display-name']} (node pool gone)")
-            for kind, lister, deleter in (
-                ("load balancer", ["lb", "load-balancer", "list"], ["lb", "load-balancer", "delete", "--load-balancer-id"]),
-                ("NSG", ["network", "nsg", "list"], ["network", "nsg", "delete", "--network-security-group-id"]),
-                ("volume", ["bv", "volume", "list"], ["bv", "volume", "delete", "--volume-id"]),
+            gone = GONE
+            lbs =oci_json(["lb", "load-balancer", "list", "--compartment-id", comp, "--all"], check=False).get("data", [])
+            for kind, items, deleter in (
+                ("load balancer", lbs, ["lb", "load-balancer", "delete", "--load-balancer-id"]),
+                ("volume", oci_json(["bv", "volume", "list", "--compartment-id", comp, "--all"], check=False).get("data", []),
+                 ["bv", "volume", "delete", "--volume-id"]),
             ):
-                for r in oci_json(lister + ["--compartment-id", comp, "--all"], check=False).get("data", []):
+                for r in items:
                     owner = (r.get("freeform-tags") or {}).get(TAG_CLUSTER)
-                    state = r.get("lifecycle-state", "")
-                    if owner and owner not in live_clusters and state not in ("DELETED", "DELETING", "TERMINATED", "TERMINATING"):
+                    if owner and owner not in live_clusters and r.get("lifecycle-state", "") not in gone:
                         run(["oci"] + deleter + [r["id"], "--force"], check=False)
                         log(f"reaped {kind} {r.get('display-name')} (cluster {owner} gone)")
+            # The CCM tags its per-load-balancer NSGs with CreatedBy and ServiceUid
+            # only, never the config tags; it names them <ns>/<svc>/<lb name>/nsg.
+            live_lbs = {lb["display-name"] for lb in lbs if lb.get("lifecycle-state", "") not in gone}
+            for nsg in oci_json(["network", "nsg", "list", "--compartment-id", comp, "--all"], check=False).get("data", []):
+                parts = nsg.get("display-name", "").split("/")
+                if (nsg.get("freeform-tags") or {}).get("CreatedBy") == "CCM" and len(parts) == 4 \
+                        and parts[2] not in live_lbs and nsg.get("lifecycle-state", "") not in gone:
+                    run(["oci", "network", "nsg", "delete", "--nsg-id", nsg["id"], "--force"], check=False)
+                    log(f"reaped NSG {nsg['display-name']} (load balancer gone)")
 
     def pass_once(self):
         clusters = self.api.items("/clusters")
         nodepools = self.api.items("/nodepools")
-        live_clusters = {c["name"] for c in clusters}
         live_nodepools = {n["id"] for n in nodepools}
+        # A deleting cluster stays live for the reaper while it has instances,
+        # since its guest may still be removing its own load balancers and volumes.
+        live_clusters = set()
         compartments = set()
+        reports = []
         for c in clusters:
             spec = c.get("spec") or {}
             if spec.get("compartment_id"):
@@ -405,6 +487,8 @@ class Provisioner:
             instances = []
             for comp in {n["spec"].get("compartment_id") for n in pools if n["spec"].get("compartment_id")}:
                 instances += list_instances(comp)
+            if not c.get("deleted_time") or any(i["freeform-tags"].get(TAG_CLUSTER) == c["name"] for i in instances):
+                live_clusters.add(c["name"])
             try:
                 guest_ctx = Guest(self.cfg, c["name"]) if hc_up else None
                 if guest_ctx:
@@ -414,20 +498,31 @@ class Provisioner:
                 guest_ctx = None
             try:
                 nodes = guest_ctx.nodes() if guest_ctx else {}
-                if c.get("deleted_time") and guest_ctx:
-                    self.cleanup_guest(guest_ctx, c)
+                hold, ready = False, False
+                if c.get("deleted_time"):
+                    # Keep the nodes, and with them the guest CCM and CSI, until the
+                    # guest has removed its load balancers and volumes. Today this
+                    # rarely gets a chance: hc-hypershift deletes the HostedCluster on
+                    # the same event and the guest API is gone within a minute, so
+                    # the reaper does the work. See README.md, seams.
+                    if guest_ctx and nodes and self.cleanup_guest(guest_ctx, c):
+                        hold = age_seconds(c["deleted_time"]) < GUEST_CLEANUP_GRACE
+                    self.remove_apps_dns(c)
                 for n in pools:
-                    self.reconcile_nodepool(guest_ctx, c, n, instances, nodes)
+                    self.reconcile_nodepool(guest_ctx, c, n, instances, nodes, hold)
                 if guest_ctx and not c.get("deleted_time") and any(
                         any(x["type"] == "Ready" and x["status"] == "True" for x in o["status"]["conditions"])
                         for o in nodes.values()):
-                    self.bootstrap_guest(guest_ctx, c)
+                    ready = self.bootstrap_guest(guest_ctx, c)
+                reports.append((c, ready))
             finally:
                 if guest_ctx:
                     guest_ctx.__exit__(None, None, None)
         compartments.discard(None)
         compartments |= set(filter(None, os.environ.get("REAP_COMPARTMENTS", "").split(",")))
         self.reap(live_clusters, live_nodepools, compartments)
+        for c, ready in reports:
+            self.report_cluster(c, ready, self.leftovers(c["name"], compartments) if c.get("deleted_time") else [])
 
 
 def main():

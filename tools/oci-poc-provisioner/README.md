@@ -23,9 +23,14 @@ One reconcile pass every 30 seconds (`--once` for a single pass):
 | Replace on config change | instance tag vs current config version | surge one new instance, retire a stale one only when every current instance is Ready: cordon, drain, delete Node, terminate |
 | Scale down | count | cordon, drain, delete Node, terminate the newest |
 | Bootstrap the guest | cluster spec `compartment_id`, `vcn_id`, `lb_subnet_id` | once a node is Ready: OCI provider package (`scripts/oci-poc-guest-oci.sh install` and `configure`, everything tagged `hyperfleet-cluster`), `*.apps` DNS record to the ingress load balancer |
-| Clean up on cluster delete | cluster `deleted_time` | delete the guest's LoadBalancer Services and PVCs while the guest still answers |
-| Reap | tags | terminate instances whose node pool is gone; delete load balancers, NSGs and volumes tagged with a cluster that is gone |
-| Report | `PUT .../nodepools/{id}/statuses` as adapter `oci-provisioner` | instances, Ready nodes, config version |
+| Clean up on cluster delete | cluster `deleted_time` | delete the guest's LoadBalancer Services and PVCs, and keep the nodes (and with them the guest CCM and CSI) until they are gone or 10 minutes pass; remove the `*.apps` record |
+| Reap | tags | terminate instances whose node pool is gone; delete load balancers and volumes tagged with a cluster that is gone or has no instances left; delete CCM NSGs whose load balancer is gone |
+| Report | `PUT .../statuses` as adapter `oci-provisioner`, on node pools and clusters | node pool: instances, Ready nodes, config version, `Finalized` once its instances are gone; cluster: `Available` once the guest is bootstrapped, `Finalized` once no instances or tagged load balancers and volumes remain |
+
+The `oci` Helmfile environment lists `oci-provisioner` under `externalAdapters`,
+so the API requires its status on clusters and node pools: a node pool is
+reconciled only with Ready nodes, and neither is hard-deleted before the
+stand-in reports `Finalized`.
 
 ## Running it
 
@@ -52,7 +57,12 @@ therefore something HyperFleet, HyperShift or the provider has to design.
 | Drains through the guest API | scale down and replace need cordon and drain | the same narrow guest identity, plus PodDisruptionBudget handling rules |
 | Installs the OCI provider package and configures the guest | a None guest has no CCM, CSI, ingress load balancer or registry storage | an owned, versioned provider package delivered by HyperShift or an operator, not by the instance launcher |
 | Writes `*.apps` DNS | nothing else knows the ingress load balancer's IP | a DNS owner for guest ingress (external-dns in the guest, or the provider) |
-| Cleans up guest load balancers and volumes before the control plane goes, and reaps by tag afterwards | the guest CCM and CSI create resources in the customer compartment and disappear with the cluster | a delete ordering in HyperFleet (provider finalizes before the hosted cluster is removed), and tags on every created resource |
+| Cleans up guest load balancers and volumes before the control plane goes, and reaps by tag afterwards | the guest CCM and CSI create resources in the customer compartment and run on the workers, so they go with the last node; every required adapter gets the delete at once, `hc-hypershift` deletes the HostedCluster straight away, and the guest API was gone within a minute of the `DELETE`, so in practice the reaper does all of it | a delete ordering in HyperFleet (guest cloud resources, then workers, then the control plane), and the cluster tag on every created resource from the moment it is created; a resource created before the tag is configured cannot be traced back |
+| Tags load balancers and volumes through the CCM `tags.loadBalancer` and `tags.blockVolume` sections | `tags.common` is only merged when OKE's resource tracking feature is on, which it is not outside OKE | the provider package setting per-kind tags |
+| Finds CCM NSGs by name | the CCM tags its per-load-balancer NSGs with `CreatedBy` and `ServiceUid` only | the cluster tag on NSGs too |
+| Is a required adapter only through an `externalAdapters` list in the Helmfile environment | the API derives required adapters from the adapters Helmfile deploys | a supported way to register an external reporter as required, per kind |
+| Reports `Available` on a cluster once the guest is bootstrapped | it has no cheap signal for "every operator is healthy" | a status that says what it means: bootstrapped (about 12 minutes from `POST`) is not complete (about 17 minutes) |
+| Approves a stopped period's CSR backlog in one go | a kubelet with no approved client CSR raises a new one about every 15 minutes | an approver that only accepts the newest CSR per node |
 | Polls every 30 seconds | HyperFleet has no event the provider can subscribe to | a subscription (broker topic or webhook) for node pool changes |
 | Learns a NodePool config change only when the adapter next reports | a change made in HyperShift directly does not bump the HyperFleet generation, so the adapter does not run again until the sentinel's 30-minute staleness rule | config changes only through HyperFleet, or the adapter reporting on HyperShift changes |
 | One OCI API key for every customer compartment | it runs in our tenancy | cross-tenancy launch permissions granted by each customer |

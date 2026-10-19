@@ -93,13 +93,15 @@ extraVolumeMounts:
 {{ end }}
 
 {{/*
-  required_adapters lists the adapters each environment deploys for a kind. An
+  required_adapters lists the adapters each environment deploys for a kind,
+  plus its externalAdapters: status reporters that run outside Helmfile but
+  must still report before a resource is reconciled or hard-deleted. An
   environment can deploy none for a kind, and the API chart schema rejects
   null, so render a list.
 */}}
 {{- $clusterAdapters := list }}
 {{- $nodePoolAdapters := list }}
-{{- range .Values.adapters }}
+{{- range concat .Values.adapters (.Values | get "externalAdapters" list) }}
 {{- if eq .resourceType "clusters" }}
 {{- $clusterAdapters = append $clusterAdapters .name }}
 {{- else if eq .resourceType "nodepools" }}
