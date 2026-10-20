@@ -15,6 +15,12 @@ metadata:
     # No SCC admission on a non-OpenShift management cluster.
     hypershift.openshift.io/pod-security-admission-label-override: privileged
 spec:
+  # HyperShift fills clusterID in when it is empty and then refuses its removal,
+  # so a template without it can create a HostedCluster but never update one.
+  # The guest's ClusterVersion only accepts a version-4 UUID and HyperFleet IDs
+  # are version 7 (same variant bits), so derive it by setting the version digit
+  # to 4: stable, and distinct for distinct clusters.
+  clusterID: "{{ slice .resourceId 0 14 }}4{{ slice .resourceId 15 }}"
   infraID: "{{ .clusterName }}"
   release:
     image: "quay.io/openshift-release-dev/ocp-release:{{ .version }}-x86_64"

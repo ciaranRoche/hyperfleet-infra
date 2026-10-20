@@ -105,13 +105,19 @@ post:
         conditions:
           - type: Applied
             status:
-              expression: 'resource_states.?nodePool.orValue("") == "present" ? "True" : "False"'
+              expression: |
+                resource_states.?nodePool.orValue("") == "present" && adapter.?executionStatus.orValue("") == "success"
+                  ? "True" : "False"
             reason:
               expression: |
                 !hostedClusterApplied && !is_deleting ? "WaitingForHostedCluster"
+                  : adapter.?executionStatus.orValue("") != "success" ? "ApplyFailed"
                   : resource_states.?nodePool.orValue("") == "present" ? "NodePoolApplied" : "NodePoolPending"
             message:
-              expression: '"NodePool " + clustersNamespace + "/" + hsNodePoolName + " is " + resource_states.?nodePool.orValue("absent")'
+              expression: |
+                adapter.?executionStatus.orValue("") != "success"
+                  ? adapter.?executionError.?message.orValue(adapter.?errorMessage.orValue("apply failed"))
+                  : "NodePool " + clustersNamespace + "/" + hsNodePoolName + " is " + resource_states.?nodePool.orValue("absent")
           # Available means a launcher can start instances: the user-data for
           # the current config exists. On None nothing reports node health here.
           - type: Available
@@ -167,8 +173,13 @@ post:
                 : ""
           version:
             expression: 'resources.?nodePool.?status.?version.orValue("")'
+        # The generation the NodePool actually carries, not the one this event
+        # asked for: a failed apply must not report the new generation as
+        # observed. The API rejects 0, so a failed first create reports 1.
         observed_generation:
-          expression: generation
+          expression: |
+            adapter.?executionStatus.orValue("") == "success" ? generation
+              : int(resources.?nodePool.?metadata.?annotations[?"hyperfleet.io/generation"].orValue("1"))
         observed_time: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
 
   post_actions:

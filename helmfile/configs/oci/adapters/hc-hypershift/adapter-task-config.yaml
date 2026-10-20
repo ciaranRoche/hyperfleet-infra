@@ -87,11 +87,18 @@ post:
         conditions:
           - type: Applied
             status:
-              expression: 'resource_states.?hostedCluster.orValue("") == "present" ? "True" : "False"'
+              expression: |
+                resource_states.?hostedCluster.orValue("") == "present" && adapter.?executionStatus.orValue("") == "success"
+                  ? "True" : "False"
             reason:
-              expression: 'resource_states.?hostedCluster.orValue("") == "present" ? "HostedClusterApplied" : "HostedClusterPending"'
+              expression: |
+                adapter.?executionStatus.orValue("") != "success" ? "ApplyFailed"
+                  : resource_states.?hostedCluster.orValue("") == "present" ? "HostedClusterApplied" : "HostedClusterPending"
             message:
-              expression: '"HostedCluster " + clustersNamespace + "/" + clusterName + " is " + resource_states.?hostedCluster.orValue("absent")'
+              expression: |
+                adapter.?executionStatus.orValue("") != "success"
+                  ? adapter.?executionError.?message.orValue(adapter.?errorMessage.orValue("apply failed"))
+                  : "HostedCluster " + clustersNamespace + "/" + clusterName + " is " + resource_states.?hostedCluster.orValue("absent")
           - type: Available
             status:
               expression: |
@@ -151,8 +158,13 @@ post:
             expression: 'resources.?hostedCluster.?status.?version.?desired.?version.orValue(version)'
           kubeconfig_secret:
             expression: 'resources.?hostedCluster.?status.?kubeconfig.?name.orValue("")'
+        # The generation the HostedCluster actually carries, not the one this event
+        # asked for: a failed apply must not report the new generation as
+        # observed. The API rejects 0, so a failed first create reports 1.
         observed_generation:
-          expression: generation
+          expression: |
+            adapter.?executionStatus.orValue("") == "success" ? generation
+              : int(resources.?hostedCluster.?metadata.?annotations[?"hyperfleet.io/generation"].orValue("1"))
         observed_time: "{{ now | date \"2006-01-02T15:04:05Z07:00\" }}"
 
   post_actions:
