@@ -30,7 +30,14 @@ ADAPTER = "oci-provisioner"
 TAG_NODEPOOL = "hyperfleet-nodepool-id"
 TAG_CLUSTER = "hyperfleet-cluster"
 TAG_CONFIG = "hyperfleet-config-version"
+# On a volume whose guest PV has reclaim policy Retain: kept when the cluster goes.
+TAG_RETAIN = "hyperfleet-retain"
+MANAGED_ANNOTATION = "hyperfleet.io/oci-provisioner-managed"
 GONE = ("DELETED", "DELETING", "TERMINATED", "TERMINATING")
+# Repair: a node NotReady this long, or an instance running this long without
+# ever registering a node, is replaced.
+NOT_READY_GRACE = 300
+NEVER_JOINED_GRACE = 900
 # How long a cluster delete keeps its nodes while the guest removes its load
 # balancers and volumes; after that the reaper takes over.
 GUEST_CLEANUP_GRACE = 600
@@ -220,6 +227,9 @@ class Provisioner:
     def __init__(self, cfg):
         self.cfg = cfg
         self.api = HyperFleet(cfg.api)
+        self.blocked = {}    # node pool id -> why a drain is paused
+        self.cordoned = {}   # node pool id -> the node left cordoned by that drain
+        self.retained = set()  # volume OCIDs already tagged TAG_RETAIN
         self._ad = {}
 
     def user_data(self, namespace, name):
@@ -260,14 +270,64 @@ class Provisioner:
             os.remove(ud)
         log(f"{cluster['name']}/{np['name']}: launched {name} ({fd or 'any fault domain'}, config {data['config_version']})")
 
-    def remove(self, guest, instance, why):
-        name = instance["display-name"]
+    def unhealthy(self, mine, nodes, have_guest):
+        """Instances to repair, with the reason: stopped in OCI, a node NotReady
+        past the grace period, or running past the join grace with no node."""
+        out = {}
+        for i in mine:
+            name, state = i["display-name"], i["lifecycle-state"]
+            if state in ("STOPPED", "STOPPING"):
+                out[i["id"]] = f"instance {state}"
+            elif not have_guest or state != "RUNNING":
+                continue
+            elif name in nodes:
+                c = next((c for c in nodes[name]["status"]["conditions"] if c["type"] == "Ready"), None)
+                if c and c["status"] != "True" and age_seconds(c["lastTransitionTime"]) > NOT_READY_GRACE:
+                    out[i["id"]] = f"node Ready={c['status']} since {c['lastTransitionTime']}"
+            elif age_seconds(i["time-created"]) > NEVER_JOINED_GRACE:
+                out[i["id"]] = "no node after 15 minutes"
+        return out
+
+    def remove(self, guest, instance, why, drain=True):
+        """Cordon, drain, delete the Node, terminate. A drain that cannot finish
+        (a PodDisruptionBudget, say) pauses instead: the node stays cordoned and
+        the instance running, the node pool reports why, the next pass retries."""
+        name, pool = instance["display-name"], instance["freeform-tags"].get(TAG_NODEPOOL)
         if guest:
             guest.k(["cordon", name], check=False)
-            guest.k(["drain", name, "--ignore-daemonsets", "--delete-emptydir-data", "--force", "--timeout=300s"], check=False)
+            if drain:
+                try:
+                    kube(guest.kubeconfig, ["drain", name, "--ignore-daemonsets", "--delete-emptydir-data", "--force", "--timeout=60s"])
+                except RuntimeError as e:
+                    reason = self.drain_blocker(guest, name) or str(e)[-160:]
+                    if pool not in self.blocked:
+                        log(f"drain of {name} paused ({why}): {reason}")
+                    self.blocked[pool] = f"drain of {name} paused: {reason}"
+                    self.cordoned[pool] = name
+                    return False
             guest.k(["delete", "node", name, "--ignore-not-found"], check=False)
+        self.blocked.pop(pool, None)
+        self.cordoned.pop(pool, None)
         oci_json(["compute", "instance", "terminate", "--instance-id", instance["id"], "--preserve-boot-volume", "false", "--force"])
         log(f"terminating {name}: {why}")
+
+    def drain_blocker(self, guest, node):
+        """Name the pods a drain could not evict and the budgets holding them."""
+        pods = json.loads(guest.k(["get", "pods", "-A", "--field-selector", f"spec.nodeName={node}", "-o", "json"], check=False) or '{"items": []}')["items"]
+        left = [p for p in pods if p["status"].get("phase") not in ("Succeeded", "Failed")
+                and not any(o.get("kind") in ("DaemonSet", "Node") for o in p["metadata"].get("ownerReferences", []))]
+        if not left:
+            return ""
+        pdbs = json.loads(guest.k(["get", "pdb", "-A", "-o", "json"], check=False) or '{"items": []}')["items"]
+        held = []
+        for b in pdbs:
+            sel = (b["spec"].get("selector") or {}).get("matchLabels") or {}
+            if b.get("status", {}).get("disruptionsAllowed", 1) == 0 and sel and any(
+                    p["metadata"]["namespace"] == b["metadata"]["namespace"]
+                    and all((p["metadata"].get("labels") or {}).get(k) == v for k, v in sel.items()) for p in left):
+                held.append(f"{b['metadata']['namespace']}/{b['metadata']['name']}")
+        names = ", ".join(f"{p['metadata']['namespace']}/{p['metadata']['name']}" for p in left[:5])
+        return f"PodDisruptionBudget {', '.join(held)} allows no disruption ({names} not evicted)" if held else f"{names} not evicted"
 
     def reconcile_nodepool(self, guest, cluster, np, instances, nodes, hold=False):
         path = f"/clusters/{cluster['id']}/nodepools/{np['id']}"
@@ -278,16 +338,21 @@ class Provisioner:
         if not deleting and not (status and status["data"].get("user_data_secret_name")):
             return mine
         current = status["data"]["config_version"] if status else ""
-        fresh = [i for i in mine if i["freeform-tags"].get(TAG_CONFIG) == current]
-        stale = [i for i in mine if i not in fresh]
         ready = {n for n, o in nodes.items()
                  if any(c["type"] == "Ready" and c["status"] == "True" for c in o["status"]["conditions"])}
+        unhealthy = {} if deleting else self.unhealthy(mine, nodes, bool(guest))
+        fresh = [i for i in mine if i["freeform-tags"].get(TAG_CONFIG) == current and i["id"] not in unhealthy]
+        stale = [i for i in mine if i not in fresh]
 
         if guest:
             approved = guest.approve_csrs({i["display-name"] for i in mine})
             if approved:
                 log(f"{cluster['name']}/{np['name']}: approved {', '.join(approved)}")
-            self.apply_labels_taints(guest, np, [i["display-name"] for i in mine if i["display-name"] in nodes])
+            self.apply_labels_taints(guest, np, [i["display-name"] for i in mine if i["display-name"] in nodes], nodes)
+
+        # A paused drain is retried by whichever branch below still wants the
+        # node gone; remove() pauses it again if the budget still holds.
+        self.blocked.pop(np["id"], None)
 
         # One change per pass. A replace surges by one: launch only while the
         # pool is at or under its count, retire a stale instance once every
@@ -299,37 +364,70 @@ class Provisioner:
         elif len(fresh) < desired and len(mine) <= desired:
             self.launch(cluster, np, status, mine)
         elif stale and all(i["display-name"] in ready for i in fresh):
-            self.remove(guest, stale[0], f"config {stale[0]['freeform-tags'].get(TAG_CONFIG)} replaced by {current}")
+            old = stale[0]
+            if old["id"] in unhealthy:
+                self.remove(guest, old, f"unhealthy ({unhealthy[old['id']]}), replaced", drain=False)
+            else:
+                self.remove(guest, old, f"config {old['freeform-tags'].get(TAG_CONFIG)} replaced by {current}")
         elif not stale and len(mine) > desired:
             self.remove(guest, sorted(mine, key=lambda i: i["time-created"])[-1], "scale down")
+
+        # The spec moved on while a drain was paused (count raised again, say):
+        # nothing wants that node gone any more, so put it back in service.
+        if guest and np["id"] not in self.blocked and np["id"] in self.cordoned:
+            name = self.cordoned.pop(np["id"])
+            if any(i["display-name"] == name for i in mine):
+                guest.k(["uncordon", name], check=False)
+                log(f"{cluster['name']}/{np['name']}: drain of {name} no longer needed, uncordoned")
 
         self.report(path, np, mine, ready, desired, current)
         return mine
 
-    def apply_labels_taints(self, guest, np, names):
-        """None never applies NodePool labels or taints to nodes; the launcher does."""
+    def apply_labels_taints(self, guest, np, names, nodes):
+        """None never applies NodePool labels or taints to nodes; the launcher does.
+        The keys it applied are kept in a node annotation, so a label or taint
+        removed from the spec is removed from the nodes too."""
         labels = np["spec"].get("labels") or {}
         taints = np["spec"].get("taints") or []
+        want_taints = {f"{t['key']}:{t['effect']}" for t in taints}
         for name in names:
-            if labels:
-                guest.k(["label", "node", name, "--overwrite"] + [f"{k}={v}" for k, v in labels.items()], check=False)
+            meta = nodes[name]["metadata"]
+            had = json.loads((meta.get("annotations") or {}).get(MANAGED_ANNOTATION, "{}"))
+            have_labels = meta.get("labels") or {}
+            have_taints = {f"{t['key']}:{t['effect']}": t.get("value", "") for t in nodes[name]["spec"].get("taints") or []}
+            args = [f"{k}-" for k in had.get("labels", []) if k not in labels and k in have_labels]
+            args += [f"{k}={v}" for k, v in labels.items() if have_labels.get(k) != v]
+            if args:
+                guest.k(["label", "node", name, "--overwrite"] + args, check=False)
+            for key in had.get("taints", []):
+                if key not in want_taints and key in have_taints:
+                    guest.k(["taint", "node", name, f"{key}-"], check=False)
             for t in taints:
-                guest.k(["taint", "node", name, "--overwrite", f"{t['key']}={t.get('value', '')}:{t['effect']}"], check=False)
+                if have_taints.get(f"{t['key']}:{t['effect']}") != t.get("value", ""):
+                    guest.k(["taint", "node", name, "--overwrite", f"{t['key']}={t.get('value', '')}:{t['effect']}"], check=False)
+            managed = json.dumps({"labels": sorted(labels), "taints": sorted(want_taints)}, separators=(",", ":"))
+            if (meta.get("annotations") or {}).get(MANAGED_ANNOTATION) != managed:
+                guest.k(["annotate", "node", name, "--overwrite", f"{MANAGED_ANNOTATION}={managed}"], check=False)
 
     def report(self, path, np, mine, ready, desired, current):
         names = [i["display-name"] for i in mine]
         n_ready = len([n for n in names if n in ready])
+        # Ready nodes on an old config do not count: while a replace is rolling,
+        # this generation is not reached yet.
+        stale = len([i for i in mine if i["freeform-tags"].get(TAG_CONFIG) != current])
         body = {
             "adapter": ADAPTER,
             "observed_generation": np["generation"],
             "observed_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "conditions": [
-                {"type": "Applied", "status": "True" if len(mine) == desired else "False",
-                 "reason": "InstancesMatch" if len(mine) == desired else "Scaling",
-                 "message": f"{len(mine)} instances for {desired} desired"},
-                {"type": "Available", "status": "True" if n_ready >= desired else "False",
-                 "reason": "NodesReady" if n_ready >= desired else "NodesNotReady",
-                 "message": f"{n_ready} of {desired} nodes Ready"},
+                {"type": "Applied", "status": "True" if len(mine) == desired and np["id"] not in self.blocked else "False",
+                 "reason": "DrainBlocked" if np["id"] in self.blocked else ("InstancesMatch" if len(mine) == desired else "Scaling"),
+                 "message": self.blocked.get(np["id"], f"{len(mine)} instances for {desired} desired")},
+                # A paused drain means this generation is not reached: say so in
+                # Available, the condition the API's Reconciled is built from.
+                {"type": "Available", "status": "True" if n_ready >= desired and not stale and np["id"] not in self.blocked else "False",
+                 "reason": "DrainBlocked" if np["id"] in self.blocked else ("NodesNotReady" if n_ready < desired else ("Updating" if stale else "NodesReady")),
+                 "message": self.blocked.get(np["id"], f"{n_ready} of {desired} nodes Ready" + (f", {stale} on an old config" if stale else ""))},
                 {"type": "Health", "status": "True", "reason": "Healthy", "message": "ok"},
                 {"type": "Finalized", "status": "True" if np.get("deleted_time") and not mine else "False",
                  "reason": "InstancesGone" if np.get("deleted_time") and not mine else "NotDeleting", "message": "-"},
@@ -344,7 +442,8 @@ class Provisioner:
     def bootstrap_guest(self, guest, cluster):
         """Provider package, ingress load balancer and *.apps DNS, once nodes exist."""
         spec = cluster.get("spec") or {}
-        installed = guest.k(["get", "ns", "oci-cloud-controller-manager", "--ignore-not-found", "-o", "name"], check=False).strip()
+        # check=True: a dropped guest connection must not read as "not installed".
+        installed = guest.k(["get", "ns", "oci-cloud-controller-manager", "--ignore-not-found", "-o", "name"]).strip()
         if not installed:
             if not all(spec.get(k) for k in ("compartment_id", "vcn_id", "lb_subnet_id")):
                 log(f"{cluster['name']}: spec lacks compartment_id, vcn_id or lb_subnet_id; skipping provider package")
@@ -379,13 +478,30 @@ class Provisioner:
         how many load balancer Services and volumes are still there."""
         svcs = [s for s in json.loads(guest.k(["get", "svc", "-A", "-o", "json"]))["items"]
                 if s["spec"].get("type") == "LoadBalancer"]
-        pvs = json.loads(guest.k(["get", "pv", "-o", "json"]))["items"]
+        pvs = [v for v in json.loads(guest.k(["get", "pv", "-o", "json"]))["items"]
+               if v["spec"].get("persistentVolumeReclaimPolicy") != "Retain"]
         for s in svcs:
             guest.k(["-n", s["metadata"]["namespace"], "delete", "svc", s["metadata"]["name"], "--wait=false"], check=False)
         if svcs or pvs:
             guest.k(["delete", "pvc", "-A", "--all", "--wait=false"], check=False)
             log(f"{cluster['name']}: waiting on {len(svcs)} guest LoadBalancer Services and {len(pvs)} volumes")
         return len(svcs) + len(pvs)
+
+    def mark_retained(self, guest):
+        """Tag the OCI volume behind every Retain block volume PV, while the guest
+        can still say which ones they are, so the reaper leaves them."""
+        for pv in json.loads(guest.k(["get", "pv", "-o", "json"]))["items"]:
+            csi = pv["spec"].get("csi") or {}
+            vol = csi.get("volumeHandle", "")
+            if pv["spec"].get("persistentVolumeReclaimPolicy") != "Retain" or csi.get("driver") != "blockvolume.csi.oraclecloud.com" \
+                    or not vol.startswith("ocid1.volume.") or vol in self.retained:
+                continue
+            tags = oci_json(["bv", "volume", "get", "--volume-id", vol])["data"].get("freeform-tags") or {}
+            if not tags.get(TAG_RETAIN):
+                oci_json(["bv", "volume", "update", "--volume-id", vol, "--force",
+                          "--freeform-tags", json.dumps(dict(tags, **{TAG_RETAIN: "true"}))])
+                log(f"volume {pv['metadata']['name']} has reclaim policy Retain: tagged {TAG_RETAIN}")
+            self.retained.add(vol)
 
     def remove_apps_dns(self, cluster):
         """The *.apps record is the stand-in's own; nothing else removes it."""
@@ -409,7 +525,8 @@ class Provisioner:
             for kind, lister in (("load balancer", ["lb", "load-balancer", "list"]), ("volume", ["bv", "volume", "list"])):
                 left += [f"{kind} {r.get('display-name')}"
                          for r in oci_json(lister + ["--compartment-id", comp, "--all"], check=False).get("data", [])
-                         if (r.get("freeform-tags") or {}).get(TAG_CLUSTER) == name and r.get("lifecycle-state") not in GONE]
+                         if (r.get("freeform-tags") or {}).get(TAG_CLUSTER) == name and r.get("lifecycle-state") not in GONE
+                         and not (r.get("freeform-tags") or {}).get(TAG_RETAIN)]
         return left
 
     def report_cluster(self, cluster, ready, left):
@@ -453,7 +570,8 @@ class Provisioner:
             ):
                 for r in items:
                     owner = (r.get("freeform-tags") or {}).get(TAG_CLUSTER)
-                    if owner and owner not in live_clusters and r.get("lifecycle-state", "") not in gone:
+                    if owner and owner not in live_clusters and r.get("lifecycle-state", "") not in gone \
+                            and not (r.get("freeform-tags") or {}).get(TAG_RETAIN):
                         run(["oci"] + deleter + [r["id"], "--force"], check=False)
                         log(f"reaped {kind} {r.get('display-name')} (cluster {owner} gone)")
             # The CCM tags its per-load-balancer NSGs with CreatedBy and ServiceUid
@@ -514,7 +632,10 @@ class Provisioner:
                         any(x["type"] == "Ready" and x["status"] == "True" for x in o["status"]["conditions"])
                         for o in nodes.values()):
                     ready = self.bootstrap_guest(guest_ctx, c)
+                    self.mark_retained(guest_ctx)
                 reports.append((c, ready))
+            except Exception as e:  # one cluster's failure must not stop the others
+                log(f"{c['name']}: pass failed for this cluster: {e}")
             finally:
                 if guest_ctx:
                     guest_ctx.__exit__(None, None, None)
