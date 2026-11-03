@@ -121,7 +121,7 @@ sweep_nsgs() {
         if tf_tagged "${item}"; then continue; fi
         found=$((found + 1))
         if keep_tagged "${item}"; then log "  keep (hyperfleet-keep): NSG ${name}"; continue; fi
-        if deleting "NSG ${name} (not Terraform-managed)"; then quiet oci network nsg delete --network-security-group-id "${id}" --force --wait-for-state TERMINATED; fi
+        if deleting "NSG ${name} (not Terraform-managed)"; then quiet oci network nsg delete --nsg-id "${id}" --force --wait-for-state TERMINATED; fi
     done < <(list_json network nsg list --compartment-id "${c}" | jq -c '.[] | select(."lifecycle-state" == "AVAILABLE")')
 }
 
